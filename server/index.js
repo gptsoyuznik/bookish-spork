@@ -9,84 +9,119 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Подключения ────────────────────────────────
+// ─── Webhook Telegram ──────────────────────────────
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 bot.setWebHook(`${process.env.BASE_URL}/telegram-webhook`);
 console.log('✅ Webhook инициализирован');
 
+app.post('/telegram-webhook', (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// ─── Инициализация OpenAI и Supabase ────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// ─── Хранилище шагов Telegram-взаимодействия ────
+// ─── Хранилище состояния пользователя ──────────────
 const userStates = new Map();
 
-// ─── Telegram Webhook ───────────────────────────
-app.post('/telegram-webhook', async (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-// ─── Telegram‑логика: шаги, но только после оплаты ──
+// ─── Обработка сообщений Telegram ───────────────────
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
   if (!text) return;
 
-  // 🚫 Блокируем ответы, если нет оплаты
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('bothelp_user_id', String(chatId))
-    .eq('status', 'paid')
-    .single();
-
-  if (!user || error) {
-    // Не мешаем BotHelp, просто выходим
-    return;
-  }
-
-  // Вход в путь Telegram после оплаты
+  // ⛳️ Первый вход: /start
   if (text === '/start') {
+    await bot.sendMessage(chatId, '👋 Привет! Проверяю доступ…');
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('bothelp_user_id', String(chatId))
+      .single();
+
+    // Новый пользователь: добавляем в базу как new
+    if (!user || error) {
+      await supabase
+        .from('users')
+        .upsert([{ bothelp_user_id: String(chatId), status: 'new' }]);
+
+      await bot.sendMessage(
+        chatId,
+        '⛔️ Пока доступ не открыт. Если ты оплатил, нажми кнопку «Я оплатил» в BotHelp.'
+      );
+      return;
+    }
+
+    // Проверка статуса оплаты
+    if (user.status !== 'paid') {
+      await bot.sendMessage(
+        chatId,
+        '⛔️ Пока доступ не открыт. Если ты оплатил, нажми кнопку «Я оплатил» в BotHelp.'
+      );
+      return;
+    }
+
+    // Всё в порядке — запускаем первую воронку
     userStates.set(chatId, { step: 1 });
-    await bot.sendMessage(chatId, '🎯 Ты с союзником. Первое знакомство:\n1️⃣ Как хочешь, чтобы союзник к тебе обращался?');
+    await bot.sendMessage(
+      chatId,
+      '🎯 Ты с союзником. Первое знакомство:\n1️⃣ Как хочешь, чтобы союзник к тебе обращался?'
+    );
     return;
   }
 
+  // 🤖 Дальнейшие шаги — если пользователь активен
   const state = userStates.get(chatId);
   if (!state) return;
 
   if (state.step === 1) {
-    await supabase.from('users').update({ custom_name: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ custom_name: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.set(chatId, { step: 2 });
-    await bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
-    return;
+    return bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
   }
 
   if (state.step === 2) {
-    await supabase.from('users').update({ persona: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ persona: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.set(chatId, { step: 3 });
-    await bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
-    return;
+    return bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
   }
 
   if (state.step === 3) {
-    await supabase.from('users').update({ priority: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ priority: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.delete(chatId);
-    await bot.sendMessage(chatId, 'Спасибо! Союзник теперь знает тебя лучше. Можешь писать.');
-    return;
+    return bot.sendMessage(
+      chatId,
+      '💡 Спасибо! Союзник теперь знает тебя лучше. Можешь писать что угодно.'
+    );
   }
 });
 
-// ─── BotHelp Webhook: кнопка «Я оплатил» ─────────────
+// ─── Кнопка "Я оплатил" из BotHelp ─────────────────
 app.post('/bothelp/webhook', async (req, res) => {
   const { subscriber } = req.body;
   const chatId = subscriber?.bothelp_user_id || subscriber?.id;
 
-  if (!chatId) return res.sendStatus(400);
+  if (!chatId) {
+    res.sendStatus(400);
+    return;
+  }
 
   await supabase
     .from('users')
@@ -100,13 +135,15 @@ app.post('/bothelp/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// ─── OpenAI Fast Chat для BotHelp ─────────────────
+// ─── Быстрый Fast Chat (для формы в BotHelp) ───────
 app.post('/chat', async (req, res) => {
   const { message } = req.body;
   const text =
     typeof message === 'object' ? message.text || '' : String(message || '');
 
-  if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
+  if (!text) {
+    return res.status(400).json({ error: 'Пустое сообщение' });
+  }
 
   try {
     const response = await openai.chat.completions.create({
@@ -120,6 +157,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ─── Старт сервера ───────────────────────────────
+// ─── Старт сервера ────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
+
