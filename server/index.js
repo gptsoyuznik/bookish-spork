@@ -9,16 +9,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── OpenAI ─────────────────────────────────────────────────────────
+// ─── OpenAI ─────────────────────────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ─── Supabase ────────────────────────────────────────────────────────
+// ─── Supabase ───────────────────────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// ─── BotHelp /chat endpoint ──────────────────────────────────────────
+// ─── BotHelp Webhook endpoint ───────────────────
 app.post('/chat', async (req, res) => {
   const { message } = req.body;
   const text =
@@ -38,23 +38,18 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ─── Telegram Fast Chat ──────────────────────────────────────────────
-// const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-// TelegramBot временно отключён, используется только BotHelp
-const bot = null;
-
-
+// ─── Telegram API Chat (Polling) ────────────────
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const userStates = new Map();
 
-bot.onText(/^\/start(?:\s+paid)?$/, async (msg) => {
+bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
 
-  // Проверка: пользователь существует и статус 'paid'
   const { data: user, error } = await supabase
     .from('users')
     .select('*')
     .eq('bothelp_user_id', String(chatId))
-    .eq('status', 'paid') // ← вот она: фильтрация по доступу
+    .eq('status', 'paid')
     .single();
 
   if (!user || error) {
@@ -101,20 +96,9 @@ bot.on('message', async (msg) => {
     bot.sendMessage(chatId, 'Спасибо! Союзник теперь знает тебя лучше. Можешь писать, он уже рядом.');
     return;
   }
-
-  // Если пользователь не на шаге знакомства — обычный GPT-ответ
-  try {
-    const gpt = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: msg.text }],
-    });
-    bot.sendMessage(chatId, gpt.choices[0].message.content);
-  } catch (e) {
-    console.error(e);
-    bot.sendMessage(chatId, 'Упс, что‑то сломалось. Попробуй позже.');
-  }
 });
 
-// ─── Start server ────────────────────────────────────────────────────
+// ─── Start Server ───────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
