@@ -40,6 +40,8 @@ app.post('/chat', async (req, res) => {
 
 // ─── Telegram API Chat (Polling) ────────────────
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+console.log('✅ Telegram polling запущен');
+
 const userStates = new Map();
 
 bot.onText(/^\/start$/, async (msg) => {
