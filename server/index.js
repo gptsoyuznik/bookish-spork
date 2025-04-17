@@ -39,7 +39,10 @@ app.post('/chat', async (req, res) => {
 });
 
 // ─── Telegram Fast Chat ──────────────────────────────────────────────
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+// const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+// TelegramBot временно отключён, используется только BotHelp
+const bot = null;
+
 
 const userStates = new Map();
 
