@@ -39,10 +39,7 @@ app.post('/bothelp/webhook', async (req, res) => {
 
   res.sendStatus(200);
 });
-app.post('/bothelp/webhook', async (req, res) => {
-  console.log('Webhook body:', req.body); // Вставь это!
-  ...
-});
+
 bot.on('message', (msg) => {
   console.log('👉 Telegram msg.chat.id:', msg.chat.id);
 });
