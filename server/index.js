@@ -9,35 +9,41 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Инициализируем TelegramBot через WebHook ─────
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
-bot.setWebHook(`${process.env.BASE_URL}/telegram-webhook`);
+const PORT = process.env.PORT || 3000;
+const BASE_URL = process.env.BASE_URL;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+// ─── Инициализация бота ──────────────────────────────
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
+bot.setWebHook(`${BASE_URL}/telegram-webhook`);
+console.log('✅ Webhook установлен на:', `${BASE_URL}/telegram-webhook`);
 
 app.post('/telegram-webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
-console.log('✅ Webhook инициализирован');
 
-// ─── OpenAI ─────────────────────────────────────
+// ─── OpenAI ───────────────────────────────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ─── Supabase ───────────────────────────────────
+// ─── Supabase ─────────────────────────────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// ─── Воронка по шагам ───────────────────────────
+// ─── Воронка взаимодействия ──────────────────────────
 const userStates = new Map();
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const text = msg.text?.trim();
 
   if (!text) return;
 
   if (text === '/start') {
+    console.log('▶️ Получен /start от:', chatId);
+
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
@@ -65,34 +71,48 @@ bot.on('message', async (msg) => {
   if (!state) return;
 
   if (state.step === 1) {
-    await supabase.from('users').update({ custom_name: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ custom_name: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.set(chatId, { step: 2 });
     await bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
     return;
   }
 
   if (state.step === 2) {
-    await supabase.from('users').update({ persona: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ persona: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.set(chatId, { step: 3 });
     await bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
     return;
   }
 
   if (state.step === 3) {
-    await supabase.from('users').update({ priority: text }).eq('bothelp_user_id', String(chatId));
+    await supabase
+      .from('users')
+      .update({ priority: text })
+      .eq('bothelp_user_id', String(chatId));
     userStates.delete(chatId);
-    await bot.sendMessage(chatId, 'Спасибо! Союзник теперь знает тебя лучше. Можешь писать.');
+    await bot.sendMessage(
+      chatId,
+      '✨ Спасибо! Союзник теперь знает тебя лучше. Можешь писать.'
+    );
     return;
   }
 });
 
-// ─── Обработка кнопки «Я оплатил» ─────────────────
+// ─── Вебхук от BotHelp "Я оплатил" ───────────────────
 app.post('/bothelp/webhook', async (req, res) => {
   const { subscriber } = req.body;
   const chatId = subscriber?.bothelp_user_id || subscriber?.id;
 
+  console.log('💰 Вебхук от BotHelp, chatId:', chatId);
+
   if (!chatId) {
-    res.sendStatus(400);
+    res.status(400).send('Нет chatId');
     return;
   }
 
@@ -104,25 +124,27 @@ app.post('/bothelp/webhook', async (req, res) => {
     .from('payments')
     .insert({ bothelp_user_id: String(chatId), ts: new Date().toISOString() });
 
-  await bot.sendMessage(chatId, '✅ Я получил твоё нажатие «Я оплатил». Доступ открыт — пиши /start.');
+  await bot.sendMessage(
+    chatId,
+    '✅ Я получил твоё нажатие «Я оплатил». Доступ открыт — пиши /start.'
+  );
   res.sendStatus(200);
 });
 
-// ─── OpenAI Fast Chat для BotHelp ────────────────
+// ─── Чат с GPT через BotHelp / Fast Chat ─────────────
 app.post('/chat', async (req, res) => {
   const { message } = req.body;
   const text =
     typeof message === 'object' ? message.text || '' : String(message || '');
 
-  if (!text) {
-    return res.status(400).json({ error: 'Пустое сообщение' });
-  }
+  if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
 
   try {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: text }],
     });
+
     return res.json({ reply: response.choices[0].message.content });
   } catch (err) {
     console.error('OpenAI error:', err);
@@ -130,7 +152,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ─── Запуск сервера ──────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
-
+// ─── Запуск сервера ─────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+});
