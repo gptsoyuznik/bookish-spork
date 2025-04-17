@@ -24,27 +24,22 @@ const supabase = createClient(
 
 // ─── 1) Обработчик клика «Я оплатил» из BotHelp ────────────────
 app.post('/bothelp/webhook', async (req, res) => {
-  try {
-    const { subscriber } = req.body;
-    const chatId = subscriber.bothelp_user_id;
+  const { subscriber } = req.body;
+  const chatId = subscriber.bothelp_user_id;
 
-    // Отмечаем в таблице payments
-    await supabase
-      .from('payments')
-      .insert({ bothelp_user_id: chatId, ts: new Date().toISOString() });
+  await supabase
+    .from('users')
+    .upsert([{ bothelp_user_id: String(chatId), status: 'paid' }]);
 
-    // Отправляем в Telegram подтверждение
-    await bot.sendMessage(
-      chatId,
-      '✅ Я получил твоё нажатие «Я оплатил». Скоро включу доступ вручную.'
-    );
+  await supabase
+    .from('payments')
+    .insert({ bothelp_user_id: String(chatId), ts: new Date().toISOString() });
 
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error('Webhook error:', e);
-    return res.sendStatus(500);
-  }
+  await bot.sendMessage(chatId, '✅ Я получил твоё нажатие «Я оплатил». Доступ открыт — пиши /start.');
+
+  res.sendStatus(200);
 });
+
 
 // ─── 2) BotHelp Fast Chat (Webhook) ─────────────────────────────
 app.post('/chat', async (req, res) => {
