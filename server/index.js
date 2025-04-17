@@ -50,30 +50,82 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 import TelegramBot from 'node-telegram-bot-api';
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// Инициализация Telegram бота
-const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+bot.onText(/^\/start(?:\s+paid)?$/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    'Привет! Я GPT‑СОЮЗНИК. Напиши любой вопрос – отвечу мгновенно.'
+  );
+});
 
-// Сообщения от пользователя в Telegram
+bot.onText(/^\/upgrade$/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    'Нажми, чтобы вернуться к тарифам 👇',
+    {
+      reply_markup: {
+        inline_keyboard: [[{
+          text: 'Изменить тариф',
+          url: 'https://t.me/<ТВОЙ_BOTHELP_BOT>?start=upgrade'
+        }]]
+      }
+    }
+  );
+});
+
 bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userMessage = msg.text;
-
+  if (!msg.text || msg.text.startsWith('/')) return;   // команды не трогаем
   try {
-    // Запрос в GPT-4o
-    const response = await openai.chat.completions.create({
+    const gpt = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [{ role: 'user', content: msg.text }]
     });
+    bot.sendMessage(msg.chat.id, gpt.choices[0].message.content);
+  } catch (e) {
+    console.error(e);
+    bot.sendMessage(msg.chat.id, 'Упс, что‑то сломалось. Попробуй позже.');
+  }
+});
 
-    const reply = response.choices[0].message.content;
+/* ───── Telegram fast chat ───── */
+import TelegramBot from 'node-telegram-bot-api';
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-    // Ответ обратно в Telegram
-    await bot.sendMessage(chatId, reply);
-  } catch (error) {
-    console.error('Ошибка:', error);
-    bot.sendMessage(chatId, 'Сорри, что-то пошло не так.');
+bot.onText(/^\/start(?:\s+paid)?$/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    'Привет! Я GPT‑СОЮЗНИК. Напиши любой вопрос – отвечу мгновенно.'
+  );
+});
+
+bot.onText(/^\/upgrade$/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    'Нажми, чтобы вернуться к тарифам 👇',
+    {
+      reply_markup: {
+        inline_keyboard: [[{
+          text: 'Изменить тариф',
+          url: 'https://t.me/<ТВОЙ_BOTHELP_BOT>?start=upgrade'
+        }]]
+      }
+    }
+  );
+});
+
+// обычные сообщения → GPT
+bot.on('message', async (msg) => {
+  if (!msg.text || msg.text.startsWith('/')) return;   // игнорируем команды
+  try {
+    const gpt = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: msg.text }]
+    });
+    bot.sendMessage(msg.chat.id, gpt.choices[0].message.content);
+  } catch (e) {
+    console.error(e);
+    bot.sendMessage(msg.chat.id, 'Упс, что‑то сломалось. Попробуй позже.');
   }
 });
 
