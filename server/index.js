@@ -9,13 +9,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Инициализируем TelegramBot один раз ───────────────────────
-const bot = new TelegramBot(token);
+// ─── Инициализируем TelegramBot через WebHook ─────
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 bot.setWebHook(`${process.env.BASE_URL}/telegram-webhook`);
+
 app.post('/telegram-webhook', (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
+console.log('✅ Webhook инициализирован');
 
 // ─── OpenAI ─────────────────────────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -26,10 +28,73 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// ─── 1) Обработчик клика «Я оплатил» из BotHelp ────────────────
+// ─── Воронка по шагам ───────────────────────────
+const userStates = new Map();
+
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  if (!text) return;
+
+  if (text === '/start') {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('bothelp_user_id', String(chatId))
+      .eq('status', 'paid')
+      .single();
+
+    if (!user || error) {
+      await bot.sendMessage(
+        chatId,
+        '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
+      );
+      return;
+    }
+
+    userStates.set(chatId, { step: 1 });
+    await bot.sendMessage(
+      chatId,
+      '🎯 Ты с союзником. Первое знакомство:\n1️⃣ Как хочешь, чтобы союзник к тебе обращался?'
+    );
+    return;
+  }
+
+  const state = userStates.get(chatId);
+  if (!state) return;
+
+  if (state.step === 1) {
+    await supabase.from('users').update({ custom_name: text }).eq('bothelp_user_id', String(chatId));
+    userStates.set(chatId, { step: 2 });
+    await bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
+    return;
+  }
+
+  if (state.step === 2) {
+    await supabase.from('users').update({ persona: text }).eq('bothelp_user_id', String(chatId));
+    userStates.set(chatId, { step: 3 });
+    await bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
+    return;
+  }
+
+  if (state.step === 3) {
+    await supabase.from('users').update({ priority: text }).eq('bothelp_user_id', String(chatId));
+    userStates.delete(chatId);
+    await bot.sendMessage(chatId, 'Спасибо! Союзник теперь знает тебя лучше. Можешь писать.');
+    return;
+  }
+});
+
+// ─── Обработка кнопки «Я оплатил» ─────────────────
 app.post('/bothelp/webhook', async (req, res) => {
   const { subscriber } = req.body;
-  const chatId = subscriber.bothelp_user_id;
+  const chatId = subscriber?.bothelp_user_id || subscriber?.id;
+
+  if (!chatId) {
+    res.sendStatus(400);
+    return;
+  }
 
   await supabase
     .from('users')
@@ -40,32 +105,10 @@ app.post('/bothelp/webhook', async (req, res) => {
     .insert({ bothelp_user_id: String(chatId), ts: new Date().toISOString() });
 
   await bot.sendMessage(chatId, '✅ Я получил твоё нажатие «Я оплатил». Доступ открыт — пиши /start.');
-
   res.sendStatus(200);
 });
 
-bot.on('message', (msg) => {
-  console.log('👉 Telegram msg.chat.id:', msg.chat.id);
-});
-app.post('/bothelp/webhook', async (req, res) => {
-  console.log('👉 Webhook from BotHelp:', req.body);
-
-  const { subscriber } = req.body;
-  const chatId = subscriber?.bothelp_user_id || subscriber?.id || 'UNKNOWN';
-
-  console.log('📩 chatId from webhook:', chatId);
-
-  await supabase
-    .from('users')
-    .upsert([{ bothelp_user_id: String(chatId), status: 'paid' }]);
-
-  await bot.sendMessage(chatId, '✅ Доступ открыт — пиши /start.');
-
-  res.sendStatus(200);
-});
-
-
-// ─── 2) BotHelp Fast Chat (Webhook) ─────────────────────────────
+// ─── OpenAI Fast Chat для BotHelp ────────────────
 app.post('/chat', async (req, res) => {
   const { message } = req.body;
   const text =
@@ -87,72 +130,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ─── 3) Telegram‑логика в polling режиме ────────────────────────
-const userStates = new Map();
-
-bot.onText(/^\/start$/, async (msg) => {
-  const chatId = msg.chat.id;
-  const { data: user, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('bothelp_user_id', String(chatId))
-    .eq('status', 'paid')
-    .single();
-
-  if (!user || error) {
-    await bot.sendMessage(
-      chatId,
-      '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
-    );
-    return;
-  }
-
-  userStates.set(chatId, { step: 1 });
-  await bot.sendMessage(
-    chatId,
-    '🎯 Ты с союзником. Первое знакомство:\n1️⃣ Как хочешь, чтобы союзник к тебе обращался?'
-  );
-});
-
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  if (!text || text.startsWith('/')) return;
-
-  const state = userStates.get(chatId);
-  if (!state) return;
-
-  if (state.step === 1) {
-    await supabase
-      .from('users')
-      .update({ custom_name: text })
-      .eq('bothelp_user_id', String(chatId));
-    userStates.set(chatId, { step: 2 });
-    return bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
-  }
-
-  if (state.step === 2) {
-    await supabase
-      .from('users')
-      .update({ persona: text })
-      .eq('bothelp_user_id', String(chatId));
-    userStates.set(chatId, { step: 3 });
-    return bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
-  }
-
-  if (state.step === 3) {
-    await supabase
-      .from('users')
-      .update({ priority: text })
-      .eq('bothelp_user_id', String(chatId));
-    userStates.delete(chatId);
-    return bot.sendMessage(
-      chatId,
-      'Спасибо! Союзник теперь знает тебя лучше. Можешь писать.'
-    );
-  }
-});
-
-// ─── Запуск HTTP‑сервера ───────────────────────────────────────
+// ─── Запуск сервера ──────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Сервер запущен на порту ${PORT}`));
+
