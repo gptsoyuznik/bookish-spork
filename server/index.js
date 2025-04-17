@@ -10,8 +10,12 @@ app.use(cors());
 app.use(express.json());
 
 // ─── Инициализируем TelegramBot один раз ───────────────────────
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-console.log('✅ Telegram polling запущен');
+const bot = new TelegramBot(token);
+bot.setWebHook(`${process.env.BASE_URL}/telegram-webhook`);
+app.post('/telegram-webhook', (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
 
 // ─── OpenAI ─────────────────────────────────────
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
