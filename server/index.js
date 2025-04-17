@@ -43,6 +43,9 @@ app.post('/bothelp/webhook', async (req, res) => {
   console.log('Webhook body:', req.body); // Вставь это!
   ...
 });
+bot.on('message', (msg) => {
+  console.log('👉 Telegram msg.chat.id:', msg.chat.id);
+});
 
 
 // ─── 2) BotHelp Fast Chat (Webhook) ─────────────────────────────
