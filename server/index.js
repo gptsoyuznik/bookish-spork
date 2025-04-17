@@ -17,6 +17,21 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
+// …вместо upsert/status-update:
+app.post('/bothelp/webhook', async (req, res) => {
+  const { subscriber } = req.body;           // BotHelp-шаблон
+  const chatId = subscriber.bothelp_user_id; // или subscriber.id
+
+  // сохраняем запись о попытке оплаты
+  await supabase
+    .from('payments')
+    .insert({ bothelp_user_id: chatId, ts: new Date().toISOString() });
+
+  // сообщаем пользователю, что мы увидели его клик
+  await bot.sendMessage(chatId, '✅ Я получил твоё нажатие «Я оплатил». Скоро включу доступ вручную.');
+
+  res.sendStatus(200);
+});
 
 // ─── BotHelp Webhook endpoint ───────────────────
 app.post('/chat', async (req, res) => {
