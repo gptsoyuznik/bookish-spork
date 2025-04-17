@@ -43,6 +43,22 @@ app.post('/bothelp/webhook', async (req, res) => {
 bot.on('message', (msg) => {
   console.log('👉 Telegram msg.chat.id:', msg.chat.id);
 });
+app.post('/bothelp/webhook', async (req, res) => {
+  console.log('👉 Webhook from BotHelp:', req.body);
+
+  const { subscriber } = req.body;
+  const chatId = subscriber?.bothelp_user_id || subscriber?.id || 'UNKNOWN';
+
+  console.log('📩 chatId from webhook:', chatId);
+
+  await supabase
+    .from('users')
+    .upsert([{ bothelp_user_id: String(chatId), status: 'paid' }]);
+
+  await bot.sendMessage(chatId, '✅ Доступ открыт — пиши /start.');
+
+  res.sendStatus(200);
+});
 
 
 // ─── 2) BotHelp Fast Chat (Webhook) ─────────────────────────────
