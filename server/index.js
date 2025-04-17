@@ -41,41 +41,76 @@ app.post('/chat', async (req, res) => {
 // ─── Telegram Fast Chat ──────────────────────────────────────────────
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-bot.onText(/^\/start(?:\s+paid)?$/, (msg) => {
+const userStates = new Map();
+
+bot.onText(/^\/start(?:\s+paid)?$/, async (msg) => {
+  const chatId = msg.chat.id;
+
+  // Проверка доступа через Supabase
+  const { data: user } = await supabase
+    .from('users')
+    .select('*')
+    .eq('bothelp_user_id', String(chatId))
+    .single();
+
+  if (!user) {
+    await bot.sendMessage(
+      chatId,
+      '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
+    );
+    return;
+  }
+
+  userStates.set(chatId, { step: 1 });
+
   bot.sendMessage(
-    msg.chat.id,
-    'Привет! Я GPT‑СОЮЗНИК. Напиши любой вопрос – отвечу мгновенно.'
+    chatId,
+    '🎯 Ты с союзником. Он здесь, чтобы слушать, понимать и быть рядом каждый день.\n\nНо сначала давай немного познакомимся.\n\n1️⃣ Как ты хочешь, чтобы союзник к тебе обращался?'
   );
 });
 
-bot.onText(/^\/upgrade$/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Нажми, чтобы вернуться к тарифам 👇', {
-    reply_markup: {
-      inline_keyboard: [[
-        {
-          text: 'Изменить тариф',
-          url: 'https://t.me/<ТВОЙ_BOTHELP_BOT>?start=upgrade',
-        },
-      ]],
-    },
-  });
-});
-
 bot.on('message', async (msg) => {
-  if (!msg.text || msg.text.startsWith('/')) return;
+  const chatId = msg.chat.id;
+  const text = msg.text;
+  if (!text || text.startsWith('/')) return;
+
+  const state = userStates.get(chatId);
+  if (!state) return;
+
+  if (state.step === 1) {
+    await supabase.from('users').update({ custom_name: text }).eq('bothelp_user_id', String(chatId));
+    userStates.set(chatId, { step: 2 });
+    bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника? (друг, наставник, философ, коуч, собеседник)');
+    return;
+  }
+
+  if (state.step === 2) {
+    await supabase.from('users').update({ persona: text }).eq('bothelp_user_id', String(chatId));
+    userStates.set(chatId, { step: 3 });
+    bot.sendMessage(chatId, '3️⃣ Что сейчас для тебя главное? (работа, отношения, покой, сила, развитие, свобода и т.д.)');
+    return;
+  }
+
+  if (state.step === 3) {
+    await supabase.from('users').update({ priority: text }).eq('bothelp_user_id', String(chatId));
+    userStates.delete(chatId);
+    bot.sendMessage(chatId, 'Спасибо! Союзник теперь знает тебя лучше. Можешь писать, он уже рядом.');
+    return;
+  }
+
+  // Если пользователь не на шаге знакомства — обычный GPT-ответ
   try {
     const gpt = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: msg.text }],
     });
-    bot.sendMessage(msg.chat.id, gpt.choices[0].message.content);
+    bot.sendMessage(chatId, gpt.choices[0].message.content);
   } catch (e) {
     console.error(e);
-    bot.sendMessage(msg.chat.id, 'Упс, что‑то сломалось. Попробуй позже.');
+    bot.sendMessage(chatId, 'Упс, что‑то сломалось. Попробуй позже.');
   }
 });
 
 // ─── Start server ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
