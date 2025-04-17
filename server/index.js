@@ -51,13 +51,18 @@ bot.on('message', async (msg) => {
       .eq('status', 'paid')
       .single();
 
-    if (!user || error) {
-      await bot.sendMessage(
-        chatId,
-        '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
-      );
-      return;
-    }
+   if (!user) {
+  await bot.sendMessage(
+    chatId,
+    '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
+  );
+  return;
+}
+
+if (error) {
+  console.warn('⚠️ Ошибка Supabase:', error);
+}
+
 
     userStates.set(chatId, { step: 1 });
     await bot.sendMessage(
