@@ -46,14 +46,15 @@ const userStates = new Map();
 bot.onText(/^\/start(?:\s+paid)?$/, async (msg) => {
   const chatId = msg.chat.id;
 
-  // Проверка доступа через Supabase
-  const { data: user } = await supabase
+  // Проверка: пользователь существует и статус 'paid'
+  const { data: user, error } = await supabase
     .from('users')
     .select('*')
     .eq('bothelp_user_id', String(chatId))
+    .eq('status', 'paid') // ← вот она: фильтрация по доступу
     .single();
 
-  if (!user) {
+  if (!user || error) {
     await bot.sendMessage(
       chatId,
       '⛔️ Доступ пока не открыт. Если ты уже оплатил, нажми «Я оплатил» в BotHelp.'
