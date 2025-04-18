@@ -212,12 +212,12 @@ app.post('/bothelp/register', async (req, res) => {
 app.post('/bothelp/webhook', async (req, res) => {
   try {
     console.log('BotHelp Webhook Triggered:', req.body);
-    const { bothelp_user_id, id, action } = req.body;
+    const { bothelp_user_id, id } = req.body;
     const userId = bothelp_user_id || id;
 
-    if (!userId || action !== 'payment_confirmed') {
-      console.error('Missing user ID or invalid action in /bothelp/webhook:', req.body);
-      return res.status(400).json({ error: 'Missing user ID or action' });
+    if (!userId) {
+      console.error('Missing user ID in /bothelp/webhook:', req.body);
+      return res.status(400).json({ error: 'Missing user ID' });
     }
 
     const { error: userError } = await supabase
