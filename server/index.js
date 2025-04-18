@@ -4,47 +4,42 @@ import 'dotenv/config';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
+import fetch from 'node-fetch';
+
+// Полифилл для fetch
+globalThis.fetch = fetch;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Инициализация бота с улучшенной обработкой ошибок ──────────
+// ─── Инициализация бота с таймаутами ───────────────────────────
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   polling: false,
-  request: { timeout: 5000 }
+  request: { timeout: 10000 }
 });
 
-// ─── Улучшенный вебхук Telegram с raw-парсингом ─────────────────
-app.post('/telegram-webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  try {
-    console.log('Получен вебхук:', req.body.toString());
-    const update = JSON.parse(req.body.toString());
-    bot.processUpdate(update);
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('Ошибка обработки вебхука:', err);
-    res.status(500).json({ error: 'Webhook processing failed' });
-  }
-});
-
-// ─── Инициализация Supabase с таймаутами ────────────────────────
+// ─── Инициализация Supabase с полифиллом fetch ──────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
   {
-    db: { schema: 'public' },
-    global: { fetch: { timeout: 5000 } }
+    auth: { persistSession: false },
+    global: { fetch }
   }
 );
 
 // ─── Проверка соединений при старте ────────────────────────────
 async function checkConnections() {
   try {
-    await bot.getMe();
-    console.log('✅ Бот подключен');
-    
-    const { error } = await supabase.from('users').select('*').limit(1);
+    const botInfo = await bot.getMe();
+    console.log('✅ Бот подключен:', botInfo.username);
+
+    const { error } = await supabase
+      .from('users')
+      .select('*')
+      .limit(1);
+      
     if (error) throw error;
     console.log('✅ Supabase подключен');
   } catch (err) {
@@ -53,17 +48,30 @@ async function checkConnections() {
   }
 }
 
-// ─── Улучшенная обработка сообщений с сохранением состояний ─────
+// ─── Обработка вебхука Telegram ────────────────────────────────
+app.post('/telegram-webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  try {
+    const update = JSON.parse(req.body.toString());
+    console.log('Incoming update:', update.update_id);
+    bot.processUpdate(update);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Webhook error:', err);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+// ─── Обработчик сообщений ──────────────────────────────────────
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    console.log(`Получено сообщение от ${chatId}:`, text);
-
     if (!text) return;
 
-    // Обработка /start
+    console.log(`Message from ${chatId}: ${text}`);
+
+    // Обработка команды /start
     if (text === '/start') {
       const { data: user, error } = await supabase
         .from('users')
@@ -77,7 +85,7 @@ bot.on('message', async (msg) => {
         await supabase
           .from('users')
           .upsert([{ 
-            bothelp_user_id: String(chatId), 
+            bothelp_user_id: String(chatId),
             status: 'new',
             created_at: new Date().toISOString()
           }]);
@@ -86,206 +94,172 @@ bot.on('message', async (msg) => {
       if (!user || user.status !== 'paid') {
         await bot.sendMessage(
           chatId,
-          '⛔️ Пока доступ не открыт. Если ты уже оплатил, нажми кнопку «Я оплатил» в BotHelp.'
+          '⛔ Доступ закрыт. После оплаты нажмите «Я оплатил» в BotHelp.'
         );
         return;
       }
 
-      // Очистка предыдущего состояния
-      await supabase
-        .from('user_states')
-        .delete()
-        .eq('chat_id', String(chatId));
-
-      // Установка первого шага
       await supabase
         .from('user_states')
         .upsert({ chat_id: String(chatId), step: 1 });
 
       await bot.sendMessage(
         chatId,
-        '🎯 Ты с союзником. Первое знакомство:\n1️⃣ Как хочешь, чтобы союзник к тебе обращался?'
+        '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
       );
       return;
     }
 
-    // Получение текущего состояния
-    const { data: state, error: stateError } = await supabase
+    // Получение текущего шага
+    const { data: state } = await supabase
       .from('user_states')
       .select('step')
       .eq('chat_id', String(chatId))
       .single();
 
-    if (stateError || !state) return;
+    if (!state) return;
 
     // Обработка шагов
-    if (state.step === 1) {
-      await supabase
-        .from('users')
-        .update({ 
-          custom_name: text,
-          updated_at: new Date().toISOString()
-        })
-        .eq('bothelp_user_id', String(chatId));
+    switch (state.step) {
+      case 1:
+        await supabase
+          .from('users')
+          .update({ custom_name: text })
+          .eq('bothelp_user_id', String(chatId));
 
-      await supabase
-        .from('user_states')
-        .update({ step: 2 })
-        .eq('chat_id', String(chatId));
+        await supabase
+          .from('user_states')
+          .update({ step: 2 })
+          .eq('chat_id', String(chatId));
 
-      return bot.sendMessage(chatId, '2️⃣ Кем ты видишь союзника?');
-    }
+        return bot.sendMessage(chatId, '2️⃣ Кто для вас союзник?');
+      
+      case 2:
+        await supabase
+          .from('users')
+          .update({ persona: text })
+          .eq('bothelp_user_id', String(chatId));
 
-    if (state.step === 2) {
-      await supabase
-        .from('users')
-        .update({ 
-          persona: text,
-          updated_at: new Date().toISOString()
-        })
-        .eq('bothelp_user_id', String(chatId));
+        await supabase
+          .from('user_states')
+          .update({ step: 3 })
+          .eq('chat_id', String(chatId));
 
-      await supabase
-        .from('user_states')
-        .update({ step: 3 })
-        .eq('chat_id', String(chatId));
+        return bot.sendMessage(chatId, '3️⃣ Что для вас сейчас важно?');
+      
+      case 3:
+        await supabase
+          .from('users')
+          .update({ 
+            priority: text,
+            status: 'active'
+          })
+          .eq('bothelp_user_id', String(chatId));
 
-      return bot.sendMessage(chatId, '3️⃣ Что для тебя сейчас важно?');
-    }
+        await supabase
+          .from('user_states')
+          .delete()
+          .eq('chat_id', String(chatId));
 
-    if (state.step === 3) {
-      await supabase
-        .from('users')
-        .update({ 
-          priority: text,
-          updated_at: new Date().toISOString(),
-          status: 'active'
-        })
-        .eq('bothelp_user_id', String(chatId));
-
-      await supabase
-        .from('user_states')
-        .delete()
-        .eq('chat_id', String(chatId));
-
-      return bot.sendMessage(
-        chatId,
-        '💡 Спасибо! Союзник теперь знает тебя лучше. Можешь писать что угодно.'
-      );
+        return bot.sendMessage(
+          chatId,
+          '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы.'
+        );
     }
   } catch (err) {
-    console.error('Ошибка обработки сообщения:', err);
+    console.error('Message processing error:', err);
   }
 });
 
-// ─── Улучшенный обработчик BotHelp ──────────────────────────────
+// ─── Обработчик BotHelp ────────────────────────────────────────
 app.post('/bothelp/webhook', async (req, res) => {
   try {
-    console.log('Получен запрос от BotHelp:', req.body);
-    
     const { subscriber } = req.body;
     const chatId = subscriber?.bothelp_user_id || subscriber?.id;
 
-    if (!chatId || isNaN(Number(chatId))) {
-      console.error('Неверный chat_id:', chatId);
-      return res.status(400).json({ error: 'Invalid chat_id' });
+    if (!chatId) {
+      return res.status(400).json({ error: 'Missing chat ID' });
     }
 
-    const { error: userError } = await supabase
+    await supabase
       .from('users')
       .upsert({ 
-        bothelp_user_id: String(chatId), 
+        bothelp_user_id: String(chatId),
         status: 'paid',
         payment_date: new Date().toISOString()
       });
 
-    if (userError) throw userError;
-
-    const { error: paymentError } = await supabase
+    await supabase
       .from('payments')
-      .insert({ 
-        bothelp_user_id: String(chatId), 
-        ts: new Date().toISOString(),
-        amount: subscriber?.amount || 0
+      .insert({
+        bothelp_user_id: String(chatId),
+        amount: subscriber?.amount || 0,
+        ts: new Date().toISOString()
       });
 
-    if (paymentError) throw paymentError;
-
     await bot.sendMessage(
-      chatId, 
-      '✅ Я получил твоё нажатие «Я оплатил». Доступ открыт — пиши /start.'
+      chatId,
+      '✅ Платеж подтвержден! Напишите /start для начала работы.'
     );
-    
+
     res.sendStatus(200);
   } catch (err) {
-    console.error('Ошибка обработки BotHelp:', err);
+    console.error('BotHelp webhook error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// ─── Быстрый Fast Chat с улучшенной обработкой ошибок ──────────
+// ─── Fast Chat API ─────────────────────────────────────────────
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
-    const text = typeof message === 'object' 
-      ? message.text || '' 
-      : String(message || '');
+    const text = message?.text || String(message || '').trim();
 
-    if (!text.trim()) {
-      return res.status(400).json({ error: 'Пустое сообщение' });
+    if (!text) {
+      return res.status(400).json({ error: 'Empty message' });
     }
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: text }],
-      timeout: 10000
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      fetch
     });
 
-    return res.json({ reply: response.choices[0].message.content });
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: text }],
+      max_tokens: 500
+    });
+
+    res.json({ reply: response.choices[0].message.content });
   } catch (err) {
     console.error('OpenAI error:', err);
-    return res.status(500).json({ 
-      error: 'Ошибка на сервере',
-      details: err.message
-    });
+    res.status(500).json({ error: 'AI service unavailable' });
   }
 });
 
-// ─── Эндпоинты для мониторинга ─────────────────────────────────
+// ─── Health Check Endpoints ────────────────────────────────────
 app.get('/status', async (req, res) => {
   try {
-    const botStatus = await bot.getMe();
-    const { data: userCount } = await supabase
-      .from('users')
-      .select('*', { count: 'exact' });
+    const [botInfo, dbStatus] = await Promise.all([
+      bot.getMe(),
+      supabase.from('users').select('*', { count: 'exact' })
+    ]);
 
     res.json({
-      status: 'operational',
-      bot: botStatus ? 'connected' : 'disconnected',
-      supabase: userCount !== null ? 'connected' : 'disconnected',
-      users: userCount || 0,
+      status: 'OK',
+      bot: botInfo ? 'connected' : 'disconnected',
+      database: dbStatus.data ? 'connected' : 'disconnected',
       uptime: process.uptime()
     });
   } catch (err) {
-    res.status(500).json({ status: 'degraded', error: err.message });
+    res.status(500).json({ status: 'ERROR', error: err.message });
   }
 });
 
-app.get('/debug', async (req, res) => {
-  res.json({
-    env: {
-      TELEGRAM_BOT_TOKEN: !!process.env.TELEGRAM_BOT_TOKEN,
-      SUPABASE_URL: !!process.env.SUPABASE_URL,
-      SUPABASE_ANON_KEY: !!process.env.SUPABASE_ANON_KEY,
-      OPENAI_API_KEY: !!process.env.OPENAI_API_KEY
-    }
-  });
-});
-
-// ─── Запуск сервера с проверкой подключений ────────────────────
+// ─── Запуск сервера ───────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
   await checkConnections();
 });
