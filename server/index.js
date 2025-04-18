@@ -255,10 +255,17 @@ app.post('/chat', async (req, res) => {
     });
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4', // Оставляем как есть
-      messages: [{ role: 'user', content: 'text' }],
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: text }], // Исправлено
       max_tokens: 500
     });
+
+    res.json({ reply: response.choices[0].message.content });
+  } catch (err) {
+    console.error('OpenAI error:', err);
+    res.status(500).json({ error: 'AI service unavailable' });
+  }
+});
 
     res.json({ reply: response.choices[0].message.content });
   } catch (err) {
