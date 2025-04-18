@@ -49,15 +49,36 @@ async function checkConnections() {
 }
 
 // ─── Обработка вебхука Telegram ────────────────────────────────
-app.post('/telegram-webhook', express.raw({ type: 'application/json' }), (req, res) => {
+// Замените текущий обработчик вебхука на этот:
+app.post('/telegram-webhook', express.raw({ 
+  type: 'application/json',
+  limit: '10mb'
+}), async (req, res) => {
   try {
-    const update = JSON.parse(req.body.toString());
-    console.log('Incoming update:', update.update_id);
-    bot.processUpdate(update);
+    if (!req.body || req.body.length === 0) {
+      return res.status(400).json({ error: 'Empty request body' });
+    }
+
+    let update;
+    try {
+      const rawBody = req.body.toString('utf8');
+      console.log('Raw webhook body:', rawBody); // Для отладки
+      update = JSON.parse(rawBody);
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      return res.status(400).json({ error: 'Invalid JSON' });
+    }
+
+    if (!update.update_id) {
+      console.error('Invalid Telegram update:', update);
+      return res.status(400).json({ error: 'Invalid Telegram update format' });
+    }
+
+    await bot.processUpdate(update);
     res.sendStatus(200);
   } catch (err) {
-    console.error('Webhook error:', err);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    console.error('Webhook processing error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
