@@ -49,7 +49,6 @@ async function checkConnections() {
 }
 
 // ─── Обработка вебхука Telegram ────────────────────────────────
-// Замените текущий обработчик вебхука на этот:
 app.post('/telegram-webhook', express.raw({ 
   type: 'application/json',
   limit: '10mb'
@@ -100,19 +99,7 @@ bot.on('message', async (msg) => {
         .eq('bothelp_user_id', String(chatId))
         .single();
 
-      if (error) throw error;
-
-      if (!user) {
-        await supabase
-          .from('users')
-          .upsert([{ 
-            bothelp_user_id: String(chatId),
-            status: 'new',
-            created_at: new Date().toISOString()
-          }]);
-      }
-
-      if (!user || user.status !== 'paid') {
+      if (error || !user || user.status !== 'paid') {
         await bot.sendMessage(
           chatId,
           '⛔ Доступ закрыт. После оплаты нажмите «Я оплатил» в BotHelp.'
@@ -192,9 +179,10 @@ bot.on('message', async (msg) => {
   }
 });
 
-// ─── Обработчик BotHelp ────────────────────────────────────────
-app.post('/bothelp/webhook', async (req, res) => {
+// ─── Обработчик BotHelp для регистрации юзера ──────────────────
+app.post('/bothelp/register', async (req, res) => {
   try {
+    console.log('Received /bothelp/register body:', req.body); // Для отладки
     const { subscriber } = req.body;
     const chatId = subscriber?.bothelp_user_id || subscriber?.id;
 
@@ -204,9 +192,35 @@ app.post('/bothelp/webhook', async (req, res) => {
 
     await supabase
       .from('users')
+      .upsert([{ 
+        bothelp_user_id: String(chatId),
+        status: 'new',
+        created_at: new Date().toISOString()
+      }]);
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Register error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ─── Обработчик BotHelp для оплаты ─────────────────────────────
+app.post('/bothelp/webhook', async (req, res) => {
+  try {
+    console.log('Received /bothelp/webhook body:', req.body); // Для отладки
+    const { subscriber, action } = req.body;
+    const chatId = subscriber?.bothelp_user_id || subscriber?.id;
+
+    if (!chatId || action !== 'payment_confirmed') {
+      return res.status(400).json({ error: 'Missing chat ID or action' });
+    }
+
+    await supabase
+      .from('users')
       .upsert({ 
         bothelp_user_id: String(chatId),
-        status: 'paid',
+        status: 'pending',
         payment_date: new Date().toISOString()
       });
 
@@ -217,11 +231,6 @@ app.post('/bothelp/webhook', async (req, res) => {
         amount: subscriber?.amount || 0,
         ts: new Date().toISOString()
       });
-
-    await bot.sendMessage(
-      chatId,
-      '✅ Платеж подтвержден! Напишите /start для начала работы.'
-    );
 
     res.sendStatus(200);
   } catch (err) {
@@ -246,8 +255,8 @@ app.post('/chat', async (req, res) => {
     });
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: text }],
+      model: 'gpt-4', // Оставляем как есть
+      messages: [{ role: 'user', content: 'text' }],
       max_tokens: 500
     });
 
