@@ -212,28 +212,35 @@ app.post('/bothelp/register', async (req, res) => {
 app.post('/bothelp/webhook', async (req, res) => {
   try {
     console.log('BotHelp Webhook Triggered:', req.body);
+    const { bothelp_user_id, id, action } = req.body;
+    const userId = bothelp_user_id || id;
 
-    // 1. Получаем ID пользователя из запроса
-    const userId = req.body.bothelp_user_id || req.body.id;
-    if (!userId) {
-      console.error('No user ID in request:', req.body);
-      return res.status(400).json({ error: 'User ID required' });
+    if (!userId || action !== 'payment_confirmed') {
+      console.error('Missing user ID or invalid action in /bothelp/webhook:', req.body);
+      return res.status(400).json({ error: 'Missing user ID or action' });
     }
 
-    // 2. Меняем статус на "pending" в базе
-    const { error } = await supabase
+    const { error: userError } = await supabase
       .from('users')
       .upsert({
         bothelp_user_id: String(userId),
         status: 'pending',
-        updated_at: new Date().toISOString()
+        payment_date: new Date().toISOString()
       });
 
-    if (error) throw error;
+    if (userError) throw userError;
 
-    console.log(`Status updated to "pending" for user: ${userId}`);
+    const { error: paymentError } = await supabase
+      .from('payments')
+      .insert({
+        bothelp_user_id: String(userId),
+        ts: new Date().toISOString()
+      });
+
+    if (paymentError) throw paymentError;
+
+    console.log(`Payment recorded for bothelp_user_id: ${userId}, status: pending`);
     res.sendStatus(200);
-
   } catch (err) {
     console.error('BotHelp Webhook Error:', err);
     res.status(500).json({ error: 'Server error' });
