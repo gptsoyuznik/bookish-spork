@@ -10,8 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 // ─── Webhook Telegram ──────────────────────────────
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
 app.post('/telegram-webhook', (req, res) => {
   bot.processUpdate(req.body);
