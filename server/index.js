@@ -183,10 +183,11 @@ bot.on('message', async (msg) => {
 app.post('/bothelp/register', async (req, res) => {
   try {
     console.log('Received /bothelp/register body:', req.body); // Для отладки
-    const { subscriber } = req.body;
-    const chatId = subscriber?.bothelp_user_id || subscriber?.id;
+    const { bothelp_user_id, id } = req.body;
+    const chatId = bothelp_user_id || id;
 
     if (!chatId) {
+      console.error('Missing chat ID in /bothelp/register:', req.body);
       return res.status(400).json({ error: 'Missing chat ID' });
     }
 
@@ -198,6 +199,7 @@ app.post('/bothelp/register', async (req, res) => {
         created_at: new Date().toISOString()
       }]);
 
+    console.log(`User created with bothelp_user_id: ${chatId}`);
     res.sendStatus(200);
   } catch (err) {
     console.error('Register error:', err);
@@ -209,10 +211,11 @@ app.post('/bothelp/register', async (req, res) => {
 app.post('/bothelp/webhook', async (req, res) => {
   try {
     console.log('Received /bothelp/webhook body:', req.body); // Для отладки
-    const { subscriber, action } = req.body;
-    const chatId = subscriber?.bothelp_user_id || subscriber?.id;
+    const { bothelp_user_id, id, action } = req.body;
+    const chatId = bothelp_user_id || id;
 
     if (!chatId || action !== 'payment_confirmed') {
+      console.error('Missing chat ID or invalid action in /bothelp/webhook:', req.body);
       return res.status(400).json({ error: 'Missing chat ID or action' });
     }
 
@@ -228,10 +231,11 @@ app.post('/bothelp/webhook', async (req, res) => {
       .from('payments')
       .insert({
         bothelp_user_id: String(chatId),
-        amount: subscriber?.amount || 0,
+        amount: req.body.amount || 0,
         ts: new Date().toISOString()
       });
 
+    console.log(`Payment recorded for bothelp_user_id: ${chatId}, status: pending`);
     res.sendStatus(200);
   } catch (err) {
     console.error('BotHelp webhook error:', err);
