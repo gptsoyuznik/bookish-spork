@@ -209,6 +209,7 @@ app.post('/bothelp/register', async (req, res) => {
 
 // ─── Обработчик BotHelp для оплаты ─────────────────────────────
 // ─── Упрощенный обработчик BotHelp (только статус pending) ───────
+
 app.post('/bothelp/webhook', async (req, res) => {
   try {
     console.log('BotHelp Webhook Triggered:', req.body);
@@ -222,11 +223,16 @@ app.post('/bothelp/webhook', async (req, res) => {
 
     const { error: userError } = await supabase
       .from('users')
-      .upsert({
-        bothelp_user_id: String(userId),
-        status: 'pending',
-        payment_date: new Date().toISOString()
-      });
+      .upsert(
+        {
+          bothelp_user_id: String(userId),
+          status: 'pending',
+          payment_date: new Date().toISOString()
+        },
+        {
+          onConflict: 'bothelp_user_id' // Явно указываем конфликтный ключ
+        }
+      );
 
     if (userError) throw userError;
 
