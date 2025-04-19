@@ -2,6 +2,7 @@
   "name": "bookish-spork-chat",
   "version": "1.0.0",
   "main": "chatbot.js",
+  "type": "module",
   "scripts": {
     "start": "node chatbot.js"
   },
