@@ -52,22 +52,34 @@ app.post('/chatbot-webhook', express.raw({
   limit: '10mb'
 }), async (req, res) => {
   try {
+    // Проверяем, что тело запроса существует и не пустое
     if (!req.body || req.body.length === 0) {
+      console.error('Empty webhook body received');
       return res.status(400).json({ error: 'Empty request body' });
     }
+
     let update;
+    const rawBody = req.body.toString('utf8');
+    console.log('Raw chatbot webhook body:', rawBody);
+
+    // Проверяем, что тело начинается с валидного JSON
+    if (!rawBody.startsWith('{') && !rawBody.startsWith('[')) {
+      console.error('Invalid webhook body: not a valid JSON', rawBody);
+      return res.status(400).json({ error: 'Invalid JSON format' });
+    }
+
     try {
-      const rawBody = req.body.toString('utf8');
-      console.log('Raw chatbot webhook body:', rawBody);
       update = JSON.parse(rawBody);
     } catch (parseError) {
-      console.error('JSON parse error:', parseError);
+      console.error('JSON parse error:', parseError, 'Raw body:', rawBody);
       return res.status(400).json({ error: 'Invalid JSON' });
     }
+
     if (!update.update_id) {
       console.error('Invalid Telegram update:', update);
       return res.status(400).json({ error: 'Invalid Telegram update format' });
     }
+
     await bot.processUpdate(update);
     res.sendStatus(200);
   } catch (err) {
@@ -75,7 +87,6 @@ app.post('/chatbot-webhook', express.raw({
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 // Обработчик сообщений для второго бота
 bot.on('message', async (msg) => {
   try {
