@@ -52,7 +52,8 @@ app.post('/chatbot-webhook', express.raw({
   limit: '10mb'
 }), async (req, res) => {
   try {
-    // Проверяем, что тело запроса существует и не пустое
+    // Проверяем наличие заголовков и тела запроса
+    console.log('Webhook headers:', req.headers);
     if (!req.body || req.body.length === 0) {
       console.error('Empty webhook body received');
       return res.status(400).json({ error: 'Empty request body' });
@@ -62,8 +63,8 @@ app.post('/chatbot-webhook', express.raw({
     const rawBody = req.body.toString('utf8');
     console.log('Raw chatbot webhook body:', rawBody);
 
-    // Проверяем, что тело начинается с валидного JSON
-    if (!rawBody.startsWith('{') && !rawBody.startsWith('[')) {
+    // Проверяем, что тело — валидный JSON
+    if (!rawBody || rawBody.trim() === '' || rawBody === ']' || !rawBody.startsWith('{') && !rawBody.startsWith('[')) {
       console.error('Invalid webhook body: not a valid JSON', rawBody);
       return res.status(400).json({ error: 'Invalid JSON format' });
     }
