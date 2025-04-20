@@ -11,7 +11,12 @@ globalThis.fetch = fetch;
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// Кэш для хранения текущей сессии
+const chatHistoryCache = new Map();
+
+// Максимальное количество сообщений в кэше для одного юзера
+const MAX_MESSAGES_PER_USER = 50;
 
 // Инициализация второго бота
 const bot = new TelegramBot(process.env.CHATBOT_TOKEN, {
@@ -46,24 +51,74 @@ async function checkConnections() {
   }
 }
 
-// Обработка вебхука Telegram для второго бота
-app.post('/chatbot-webhook', express.raw({ 
-  type: 'application/json',
-  limit: '10mb'
-}), async (req, res) => {
+// Периодическая генерация summary (каждые 12 часов)
+setInterval(async () => {
+  for (const [chatId, messages] of chatHistoryCache.entries()) {
+    if (messages.length > 0) {
+      try {
+        const openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY,
+          fetch
+        });
+
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4',
+          messages: [
+            {
+              role: 'system',
+              content: 'Ты эмпатичный союзник, который делает краткую эмоциональную сводку диалога за день. Опиши ключевые темы, эмоции и выводы в 1-2 предложениях.'
+            },
+            {
+              role: 'user',
+              content: messages.map(msg => `${msg.role}: ${msg.content}`).join('\n')
+            }
+          ],
+          max_tokens: 100
+        });
+
+        const summary = response.choices[0].message.content;
+
+        await supabase
+          .from('daily_summaries')
+          .upsert({
+            chat_id: String(chatId),
+            summary_date: new Date().toISOString().split('T')[0],
+            summary: summary,
+            created_at: new Date().toISOString()
+          });
+
+        chatHistoryCache.set(String(chatId), []);
+      } catch (err) {
+        console.error(`Error generating summary for chat ${chatId}:`, err);
+      }
+    }
+  }
+}, 12 * 60 * 60 * 1000);
+
+// Обработка вебхука Telegram
+app.post('/chatbot-webhook', express.raw({ type: 'application/json', limit: '10mb' }), async (req, res) => {
   try {
-    // Проверяем наличие заголовков и тела запроса
     console.log('Webhook headers:', req.headers);
+
     if (!req.body || req.body.length === 0) {
       console.error('Empty webhook body received');
       return res.status(400).json({ error: 'Empty request body' });
     }
 
     let update;
-    const rawBody = req.body.toString('utf8');
+    let rawBody;
+
+    if (Buffer.isBuffer(req.body)) {
+      rawBody = req.body.toString('utf8');
+    } else if (typeof req.body === 'string') {
+      rawBody = req.body;
+    } else {
+      console.error('Invalid webhook body type:', typeof req.body, req.body);
+      return res.status(400).json({ error: 'Invalid body type' });
+    }
+
     console.log('Raw chatbot webhook body:', rawBody);
 
-    // Проверяем, что тело — валидный JSON
     if (!rawBody || rawBody.trim() === '' || rawBody === ']' || !rawBody.startsWith('{') && !rawBody.startsWith('[')) {
       console.error('Invalid webhook body: not a valid JSON', rawBody);
       return res.status(400).json({ error: 'Invalid JSON format' });
@@ -88,6 +143,10 @@ app.post('/chatbot-webhook', express.raw({
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Теперь добавляем express.json для остальных маршрутов
+app.use(express.json());
+
 // Обработчик сообщений для второго бота
 bot.on('message', async (msg) => {
   try {
@@ -95,14 +154,23 @@ bot.on('message', async (msg) => {
     const text = msg.text;
     console.log(`Chatbot message from ${chatId}: ${text || 'Non-text message'}`);
 
-    // Проверка статуса paid для начала GPT-чата
-    const { data: user, error } = await supabase
+    // Находим юзера по telegram_chat_id
+    const { data: user, error: userError } = await supabase
       .from('users')
-      .select('*')
+      .select('id, status')
       .eq('telegram_chat_id', String(chatId))
       .single();
 
-    if (error || !user || user.status !== 'paid') {
+    if (userError || !user) {
+      console.error('User fetch error:', userError);
+      await bot.sendMessage(
+        chatId,
+        '⛔ Ошибка: пользователь не найден. Пожалуйста, начните с @gpt_soyuznik_bot.'
+      );
+      return;
+    }
+
+    if (user.status !== 'paid') {
       await bot.sendMessage(
         chatId,
         '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_bot для оплаты.'
@@ -111,23 +179,54 @@ bot.on('message', async (msg) => {
     }
 
     // Если юзер уже в процессе диалога
-    const { data: state } = await supabase
+    const { data: state, error: stateError } = await supabase
       .from('user_states')
       .select('step')
-      .eq('chat_id', String(chatId))
+      .eq('user_id', user.id) // Используем user_id (UUID)
       .single();
+
+    if (stateError) {
+      console.error('State fetch error:', stateError);
+    }
+
+    // Инициализация истории для нового юзера
+    if (!chatHistoryCache.has(String(chatId))) {
+      chatHistoryCache.set(String(chatId), []);
+    }
+
+    // Загружаем последнее summary из daily_summaries
+    const { data: lastSummary, error: summaryError } = await supabase
+      .from('daily_summaries')
+      .select('summary')
+      .eq('chat_id', String(chatId))
+      .order('summary_date', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (summaryError) {
+      console.error('Summary fetch error:', summaryError);
+    }
+
+    const systemPrompt = lastSummary
+      ? `Ты эмпатичный союзник. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным.`
+      : 'Ты эмпатичный союзник. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя.';
 
     // Обработка фото
     if (msg.photo) {
-      // Получаем файл самого высокого качества (последний элемент массива msg.photo)
       const photo = msg.photo[msg.photo.length - 1];
       const fileId = photo.file_id;
-
-      // Получаем URL файла через Telegram API
       const file = await bot.getFile(fileId);
       const fileUrl = `https://api.telegram.org/file/bot${process.env.CHATBOT_TOKEN}/${file.file_path}`;
 
-      // Отправляем фото в OpenAI GPT-4 для анализа
+      const messages = chatHistoryCache.get(String(chatId));
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Опиши это изображение.' },
+          { type: 'image_url', image_url: { url: fileUrl } }
+        ]
+      });
+
       const openai = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
         fetch
@@ -136,19 +235,16 @@ bot.on('message', async (msg) => {
       const response = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'Опиши это изображение.' },
-              { type: 'image_url', image_url: { url: fileUrl } }
-            ]
-          }
+          { role: 'system', content: systemPrompt },
+          ...messages
         ],
         max_tokens: 500
       });
 
       const description = response.choices[0].message.content;
       await bot.sendMessage(chatId, `Описание изображения: ${description}`);
+
+      messages.push({ role: 'assistant', content: description });
       return;
     }
 
@@ -157,10 +253,9 @@ bot.on('message', async (msg) => {
     console.log(`Chatbot message from ${chatId}: ${text}`);
 
     if (!state) {
-      // Начало диалога
       await supabase
         .from('user_states')
-        .upsert({ chat_id: String(chatId), step: 1 });
+        .upsert({ user_id: user.id, step: 1 });
       await bot.sendMessage(
         chatId,
         '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
@@ -177,7 +272,7 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .update({ step: 2 })
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
         return bot.sendMessage(chatId, '2️⃣ Кто для вас союзник?');
       
       case 2:
@@ -188,7 +283,7 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .update({ step: 3 })
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
         return bot.sendMessage(chatId, '3️⃣ Что для вас сейчас важно?');
       
       case 3:
@@ -203,30 +298,39 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .delete()
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
         return bot.sendMessage(
           chatId,
           '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы, и я помогу!'
         );
       
       default:
+        const messages = chatHistoryCache.get(String(chatId));
+        messages.push({ role: 'user', content: text });
+
         const openai = new OpenAI({
           apiKey: process.env.OPENAI_API_KEY,
           fetch
         });
         const response = await openai.chat.completions.create({
           model: 'gpt-4',
-          messages: [{ role: 'user', content: text }],
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages
+          ],
           max_tokens: 500
         });
-        await bot.sendMessage(chatId, response.choices[0].message.content);
+
+        const botResponse = response.choices[0].message.content;
+        await bot.sendMessage(chatId, botResponse);
+
+        messages.push({ role: 'assistant', content: botResponse });
     }
   } catch (err) {
     console.error('Chatbot message processing error:', err);
   }
 });
 
-// Запуск сервера для второго бота
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
