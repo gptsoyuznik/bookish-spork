@@ -258,6 +258,24 @@ bot.on('message', async (msg) => {
     if (!text) return;
     console.log(`Chatbot message from ${chatId}: ${text}`);
 
+    if (text === '/start') {
+      if (state && state.step >= 3) {
+        console.log(`User ${chatId} already completed initial dialog, clearing state`);
+        await supabase
+          .from('user_states')
+          .delete()
+          .eq('user_id', user.id);
+      }
+      await supabase
+        .from('user_states')
+        .upsert({ user_id: user.id, step: 1 });
+      await bot.sendMessage(
+        chatId,
+        '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
+      );
+      return;
+    }
+
     if (!state) {
       await supabase
         .from('user_states')
@@ -311,6 +329,20 @@ bot.on('message', async (msg) => {
           console.error('Error deleting from user_states:', deleteError);
         } else {
           console.log(`Successfully deleted user_states for user_id: ${user.id}`);
+        }
+
+        // Проверяем, что запись действительно удалена
+        const { data: checkState, error: checkError } = await supabase
+          .from('user_states')
+          .select('step')
+          .eq('user_id', user.id);
+
+        if (checkError) {
+          console.error('Error checking user_states after deletion:', checkError);
+        } else if (checkState && checkState.length > 0) {
+          console.error(`Failed to delete user_states for user_id: ${user.id}, still exists:`, checkState);
+        } else {
+          console.log(`Confirmed user_states deleted for user_id: ${user.id}`);
         }
 
         return bot.sendMessage(
