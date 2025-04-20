@@ -171,6 +171,8 @@ bot.on('message', async (msg) => {
       return;
     }
 
+    console.log(`User ${chatId} found:`, user);
+
     if (user.status !== 'paid' && user.status !== 'active') {
       console.log(`User ${chatId} status: ${user.status}, access denied`);
       await bot.sendMessage(
@@ -199,18 +201,23 @@ bot.on('message', async (msg) => {
     }
 
     // Загружаем последнее summary из daily_summaries
-    const { data: lastSummaries, error: summaryError } = await supabase
-      .from('daily_summaries')
-      .select('summary')
-      .eq('chat_id', String(chatId))
-      .order('summary_date', { ascending: false })
-      .limit(1);
+    let lastSummary = null;
+    try {
+      const { data: lastSummaries, error: summaryError } = await supabase
+        .from('daily_summaries')
+        .select('summary')
+        .eq('chat_id', String(chatId))
+        .order('summary_date', { ascending: false })
+        .limit(1);
 
-    if (summaryError) {
-      console.error('Summary fetch error:', summaryError);
+      if (summaryError) {
+        console.error('Summary fetch error:', summaryError);
+      } else {
+        lastSummary = lastSummaries && lastSummaries.length > 0 ? lastSummaries[0] : null;
+      }
+    } catch (err) {
+      console.error('Error fetching daily_summaries:', err);
     }
-
-    const lastSummary = lastSummaries && lastSummaries.length > 0 ? lastSummaries[0] : null;
     console.log(`Last summary for user ${chatId}:`, lastSummary);
 
     const systemPrompt = lastSummary
@@ -261,10 +268,19 @@ bot.on('message', async (msg) => {
     if (text === '/start') {
       if (state && state.step >= 3) {
         console.log(`User ${chatId} already completed initial dialog, clearing state`);
-        await supabase
+        const { error: deleteError } = await supabase
           .from('user_states')
           .delete()
           .eq('user_id', user.id);
+        if (deleteError) {
+          console.error('Error deleting from user_states on /start:', deleteError);
+          await supabase
+            .from('user_states')
+            .delete()
+            .eq('user_id', user.id);
+        } else {
+          console.log(`Successfully deleted user_states for user_id: ${user.id} on /start`);
+        }
       }
       await supabase
         .from('user_states')
@@ -273,6 +289,31 @@ bot.on('message', async (msg) => {
         chatId,
         '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
       );
+      return;
+    }
+
+    if (!state && user.status === 'paid') {
+      console.log(`No state found for user ${chatId}, status is paid, entering default chat mode`);
+      const messages = chatHistoryCache.get(String(chatId));
+      messages.push({ role: 'user', content: text });
+
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        fetch
+      });
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages
+        ],
+        max_tokens: 500
+      });
+
+      const botResponse = response.choices[0].message.content;
+      await bot.sendMessage(chatId, botResponse);
+
+      messages.push({ role: 'assistant', content: botResponse });
       return;
     }
 
@@ -289,10 +330,17 @@ bot.on('message', async (msg) => {
 
     switch (state.step) {
       case 1:
-        await supabase
+        console.log(`Updating user ${chatId} with custom_name: ${text}`);
+        const { error: updateError1 } = await supabase
           .from('users')
           .update({ custom_name: text })
           .eq('telegram_chat_id', String(chatId));
+        if (updateError1) {
+          console.error('Error updating custom_name:', updateError1);
+        } else {
+          console.log(`Successfully updated custom_name for user ${chatId}`);
+        }
+
         await supabase
           .from('user_states')
           .update({ step: 2 })
@@ -300,10 +348,17 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, '2️⃣ Кто для вас союзник?');
       
       case 2:
-        await supabase
+        console.log(`Updating user ${chatId} with persona: ${text}`);
+        const { error: updateError2 } = await supabase
           .from('users')
           .update({ persona: text })
           .eq('telegram_chat_id', String(chatId));
+        if (updateError2) {
+          console.error('Error updating persona:', updateError2);
+        } else {
+          console.log(`Successfully updated persona for user ${chatId}`);
+        }
+
         await supabase
           .from('user_states')
           .update({ step: 3 })
@@ -311,15 +366,20 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, '3️⃣ Что для вас сейчас важно?');
       
       case 3:
-        await supabase
+        console.log(`Updating user ${chatId} with priority: ${text}`);
+        const { error: updateError3 } = await supabase
           .from('users')
           .update({ 
             priority: text,
-            status: 'active',
             chat_started_at: new Date().toISOString()
           })
           .eq('telegram_chat_id', String(chatId));
-        
+        if (updateError3) {
+          console.error('Error updating priority:', updateError3);
+        } else {
+          console.log(`Successfully updated priority for user ${chatId}`);
+        }
+
         const { error: deleteError } = await supabase
           .from('user_states')
           .delete()
@@ -327,30 +387,22 @@ bot.on('message', async (msg) => {
 
         if (deleteError) {
           console.error('Error deleting from user_states:', deleteError);
+          await supabase
+            .from('user_states')
+            .delete()
+            .eq('user_id', user.id);
         } else {
           console.log(`Successfully deleted user_states for user_id: ${user.id}`);
         }
 
-        // Проверяем, что запись действительно удалена
-        const { data: checkState, error: checkError } = await supabase
-          .from('user_states')
-          .select('step')
-          .eq('user_id', user.id);
-
-        if (checkError) {
-          console.error('Error checking user_states after deletion:', checkError);
-        } else if (checkState && checkState.length > 0) {
-          console.error(`Failed to delete user_states for user_id: ${user.id}, still exists:`, checkState);
-        } else {
-          console.log(`Confirmed user_states deleted for user_id: ${user.id}`);
-        }
-
+        console.log(`User ${chatId} completed initial dialog, moving to default mode`);
         return bot.sendMessage(
           chatId,
           '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы, и я помогу!'
         );
       
       default:
+        console.log(`User ${chatId} in default chat mode`);
         const messages = chatHistoryCache.get(String(chatId));
         messages.push({ role: 'user', content: text });
 
