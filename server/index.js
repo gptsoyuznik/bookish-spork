@@ -13,13 +13,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── Инициализация бота с таймаутами ───────────────────────────
+// Инициализация бота с таймаутами
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, {
   polling: false,
   request: { timeout: 10000 }
 });
 
-// ─── Инициализация Supabase с полифиллом fetch ──────────────────
+// Инициализация Supabase с полифиллом fetch
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
@@ -29,7 +29,7 @@ const supabase = createClient(
   }
 );
 
-// ─── Проверка соединений при старте ────────────────────────────
+// Проверка соединений при старте
 async function checkConnections() {
   try {
     const botInfo = await bot.getMe();
@@ -48,7 +48,7 @@ async function checkConnections() {
   }
 }
 
-// ─── Обработка вебхука Telegram ────────────────────────────────
+// Обработка вебхука Telegram
 app.post('/telegram-webhook', express.raw({ 
   type: 'application/json',
   limit: '10mb'
@@ -61,7 +61,7 @@ app.post('/telegram-webhook', express.raw({
     let update;
     try {
       const rawBody = req.body.toString('utf8');
-      console.log('Raw webhook body:', rawBody); // Для отладки
+      console.log('Raw webhook body:', rawBody);
       update = JSON.parse(rawBody);
     } catch (parseError) {
       console.error('JSON parse error:', parseError);
@@ -81,7 +81,7 @@ app.post('/telegram-webhook', express.raw({
   }
 });
 
-// ─── Обработчик сообщений ──────────────────────────────────────
+// Обработчик сообщений
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
@@ -91,15 +91,25 @@ bot.on('message', async (msg) => {
 
     console.log(`Message from ${chatId}: ${text}`);
 
+    // Находим юзера по bothelp_user_id (chatId)
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id, status')
+      .eq('bothelp_user_id', String(chatId))
+      .single();
+
+    if (userError || !user) {
+      console.error('User fetch error:', userError);
+      await bot.sendMessage(
+        chatId,
+        '⛔ Ошибка: пользователь не найден. Пожалуйста, начните заново.'
+      );
+      return;
+    }
+
     // Обработка команды /start
     if (text === '/start') {
-      const { data: user, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('bothelp_user_id', String(chatId))
-        .single();
-
-      if (error || !user || user.status !== 'paid') {
+      if (user.status !== 'paid') {
         await bot.sendMessage(
           chatId,
           '⛔ Доступ закрыт. После оплаты нажмите «Я оплатил» в BotHelp.'
@@ -109,7 +119,7 @@ bot.on('message', async (msg) => {
 
       await supabase
         .from('user_states')
-        .upsert({ chat_id: String(chatId), step: 1 });
+        .upsert({ user_id: user.id, step: 1 });
 
       await bot.sendMessage(
         chatId,
@@ -119,11 +129,16 @@ bot.on('message', async (msg) => {
     }
 
     // Получение текущего шага
-    const { data: state } = await supabase
+    const { data: state, error: stateError } = await supabase
       .from('user_states')
       .select('step')
-      .eq('chat_id', String(chatId))
+      .eq('user_id', user.id)
       .single();
+
+    if (stateError) {
+      console.error('State fetch error:', stateError);
+      return;
+    }
 
     if (!state) return;
 
@@ -138,7 +153,7 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .update({ step: 2 })
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
 
         return bot.sendMessage(chatId, '2️⃣ Кто для вас союзник?');
       
@@ -151,7 +166,7 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .update({ step: 3 })
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
 
         return bot.sendMessage(chatId, '3️⃣ Что для вас сейчас важно?');
       
@@ -167,11 +182,11 @@ bot.on('message', async (msg) => {
         await supabase
           .from('user_states')
           .delete()
-          .eq('chat_id', String(chatId));
+          .eq('user_id', user.id);
 
         return bot.sendMessage(
           chatId,
-          '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы.'
+          '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы.\nПерейдите в чат: @GPTSoyuznikChatBot и напишите /start.'
         );
     }
   } catch (err) {
@@ -179,27 +194,30 @@ bot.on('message', async (msg) => {
   }
 });
 
-// ─── Обработчик BotHelp для регистрации юзера ──────────────────
+// Обработчик BotHelp для регистрации юзера
 app.post('/bothelp/register', async (req, res) => {
   try {
-    console.log('Received /bothelp/register body:', req.body); // Для отладки
-    const { bothelp_user_id, id } = req.body;
-    const chatId = bothelp_user_id || id;
+    console.log('Received /bothelp/register body:', req.body);
+    const { bothelp_user_id, id, user_id } = req.body;
+    const userId = bothelp_user_id || id;
 
-    if (!chatId) {
-      console.error('Missing chat ID in /bothelp/register:', req.body);
-      return res.status(400).json({ error: 'Missing chat ID' });
+    if (!userId) {
+      console.error('Missing user ID in /bothelp/register:', req.body);
+      return res.status(400).json({ error: 'Missing user ID' });
     }
+
+    console.log('Saving user with telegram_chat_id:', user_id || userId);
 
     await supabase
       .from('users')
       .upsert([{ 
-        bothelp_user_id: String(chatId),
+        bothelp_user_id: String(userId),
+        telegram_chat_id: String(user_id || userId),
         status: 'new',
         created_at: new Date().toISOString()
       }]);
 
-    console.log(`User created with bothelp_user_id: ${chatId}`);
+    console.log(`User created with bothelp_user_id: ${userId}, telegram_chat_id: ${user_id || userId}`);
     res.sendStatus(200);
   } catch (err) {
     console.error('Register error:', err);
@@ -207,9 +225,7 @@ app.post('/bothelp/register', async (req, res) => {
   }
 });
 
-// ─── Обработчик BotHelp для оплаты ─────────────────────────────
-// ─── Упрощенный обработчик BotHelp (только статус pending) ───────
-
+// Обработчик BotHelp для оплаты
 app.post('/bothelp/webhook', async (req, res) => {
   try {
     console.log('BotHelp Webhook Triggered:', req.body);
@@ -230,7 +246,7 @@ app.post('/bothelp/webhook', async (req, res) => {
           payment_date: new Date().toISOString()
         },
         {
-          onConflict: 'bothelp_user_id' // Явно указываем конфликтный ключ
+          onConflict: 'bothelp_user_id'
         }
       );
 
@@ -253,7 +269,49 @@ app.post('/bothelp/webhook', async (req, res) => {
   }
 });
 
-// ─── Fast Chat API ─────────────────────────────────────────────
+// Обработчик BotHelp для смены статуса на paid и отправки уведомления
+app.post('/bothelp/update-status', async (req, res) => {
+  try {
+    console.log('Update status request:', req.body);
+    const { bothelp_user_id, telegram_chat_id, status } = req.body;
+
+    if (!bothelp_user_id || !telegram_chat_id || !status) {
+      console.error('Missing fields in /bothelp/update-status:', req.body);
+      return res.status(400).json({ error: 'Missing bothelp_user_id, telegram_chat_id, or status' });
+    }
+
+    const { error: userError } = await supabase
+      .from('users')
+      .upsert(
+        {
+          bothelp_user_id: String(bothelp_user_id),
+          telegram_chat_id: String(telegram_chat_id),
+          status: status,
+          payment_date: new Date().toISOString()
+        },
+        {
+          onConflict: 'bothelp_user_id'
+        }
+      );
+
+    if (userError) throw userError;
+
+    if (status === 'paid') {
+      await bot.sendMessage(
+        telegram_chat_id,
+        'Доступ к GPT-чату открыт! Перейдите в чат: @GPTSoyuznikChatBot и напишите /start. Чтобы вернуться к меню, используйте /start в этом чате.\nhttps://t.me/GPTSoyuznikChatBot'
+      );
+    }
+
+    console.log(`Status updated for bothelp_user_id: ${bothelp_user_id} to ${status}`);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Update status error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Fast Chat API
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -281,7 +339,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ─── Health Check Endpoints ────────────────────────────────────
+// Health Check Endpoints
 app.get('/status', async (req, res) => {
   try {
     const [botInfo, dbStatus] = await Promise.all([
@@ -300,7 +358,7 @@ app.get('/status', async (req, res) => {
   }
 });
 
-// ─── Запуск сервера ───────────────────────────────────────────
+// Запуск сервера
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
