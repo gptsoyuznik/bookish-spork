@@ -179,15 +179,16 @@ bot.on('message', async (msg) => {
     }
 
     // Если юзер уже в процессе диалога
-    const { data: state, error: stateError } = await supabase
+    const { data: states, error: stateError } = await supabase
       .from('user_states')
       .select('step')
-      .eq('user_id', user.id) // Используем user_id (UUID)
-      .single();
+      .eq('user_id', user.id);
 
     if (stateError) {
       console.error('State fetch error:', stateError);
     }
+
+    const state = states && states.length > 0 ? states[0] : null;
 
     // Инициализация истории для нового юзера
     if (!chatHistoryCache.has(String(chatId))) {
@@ -195,17 +196,18 @@ bot.on('message', async (msg) => {
     }
 
     // Загружаем последнее summary из daily_summaries
-    const { data: lastSummary, error: summaryError } = await supabase
+    const { data: lastSummaries, error: summaryError } = await supabase
       .from('daily_summaries')
       .select('summary')
       .eq('chat_id', String(chatId))
       .order('summary_date', { ascending: false })
-      .limit(1)
-      .single();
+      .limit(1);
 
     if (summaryError) {
       console.error('Summary fetch error:', summaryError);
     }
+
+    const lastSummary = lastSummaries && lastSummaries.length > 0 ? lastSummaries[0] : null;
 
     const systemPrompt = lastSummary
       ? `Ты эмпатичный союзник. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным.`
@@ -334,6 +336,6 @@ bot.on('message', async (msg) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Chatbot server running on port ${PORT}`);
+  console.log(`unnies on port ${PORT}`);
   await checkConnections();
 });
