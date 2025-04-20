@@ -88,6 +88,7 @@ setInterval(async () => {
           });
 
         chatHistoryCache.set(String(chatId), []);
+        console.log(`Summary generated and saved for chatId: ${chatId}`);
       } catch (err) {
         console.error(`Error generating summary for chat ${chatId}:`, err);
       }
@@ -157,7 +158,7 @@ bot.on('message', async (msg) => {
     // Находим юзера по telegram_chat_id
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('id, status')
+      .select('id, status, custom_name, persona, priority')
       .eq('telegram_chat_id', String(chatId))
       .single();
 
@@ -170,7 +171,8 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    if (user.status !== 'paid') {
+    if (user.status !== 'paid' && user.status !== 'active') {
+      console.log(`User ${chatId} status: ${user.status}, access denied`);
       await bot.sendMessage(
         chatId,
         '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_bot для оплаты.'
@@ -189,6 +191,7 @@ bot.on('message', async (msg) => {
     }
 
     const state = states && states.length > 0 ? states[0] : null;
+    console.log(`Current state for user ${chatId}:`, state);
 
     // Инициализация истории для нового юзера
     if (!chatHistoryCache.has(String(chatId))) {
@@ -208,6 +211,7 @@ bot.on('message', async (msg) => {
     }
 
     const lastSummary = lastSummaries && lastSummaries.length > 0 ? lastSummaries[0] : null;
+    console.log(`Last summary for user ${chatId}:`, lastSummary);
 
     const systemPrompt = lastSummary
       ? `Ты эмпатичный союзник. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным.`
@@ -297,10 +301,18 @@ bot.on('message', async (msg) => {
             chat_started_at: new Date().toISOString()
           })
           .eq('telegram_chat_id', String(chatId));
-        await supabase
+        
+        const { error: deleteError } = await supabase
           .from('user_states')
           .delete()
           .eq('user_id', user.id);
+
+        if (deleteError) {
+          console.error('Error deleting from user_states:', deleteError);
+        } else {
+          console.log(`Successfully deleted user_states for user_id: ${user.id}`);
+        }
+
         return bot.sendMessage(
           chatId,
           '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы, и я помогу!'
@@ -330,12 +342,13 @@ bot.on('message', async (msg) => {
     }
   } catch (err) {
     console.error('Chatbot message processing error:', err);
+    await bot.sendMessage(chatId, '⛔ Произошла ошибка. Попробуйте снова или обратитесь в поддержку.');
   }
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
-  console.log(`unnies on port ${PORT}`);
+  console.log(`🚀 Chatbot server running on port ${PORT}`);
   await checkConnections();
 });
