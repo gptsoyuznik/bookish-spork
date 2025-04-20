@@ -237,7 +237,19 @@ app.post('/bothelp/webhook', async (req, res) => {
       return res.status(400).json({ error: 'Missing user ID' });
     }
 
-    const { error: userError } = await supabase
+    // Находим user_id по bothelp_user_id
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('bothelp_user_id', String(userId))
+      .single();
+
+    if (userError || !user) {
+      console.error('User not found for bothelp_user_id:', userId, userError);
+      throw userError;
+    }
+
+    const { error: upsertError } = await supabase
       .from('users')
       .upsert(
         {
@@ -250,12 +262,12 @@ app.post('/bothelp/webhook', async (req, res) => {
         }
       );
 
-    if (userError) throw userError;
+    if (upsertError) throw upsertError;
 
     const { error: paymentError } = await supabase
       .from('payments')
       .insert({
-        bothelp_user_id: String(userId),
+        user_id: user.id, // Используем user_id вместо bothelp_user_id
         ts: new Date().toISOString()
       });
 
