@@ -5,6 +5,7 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
+import pdfParse from 'pdf-parse'; // Добавляем импорт pdf-parse
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
@@ -235,7 +236,6 @@ bot.on('message', async (msg) => {
       const buffer = await fetchResponse.buffer();
 
       // Извлекаем текст из PDF
-      const pdfParse = require('pdf-parse');
       const pdfData = await pdfParse(buffer);
       const pdfText = pdfData.text;
 
