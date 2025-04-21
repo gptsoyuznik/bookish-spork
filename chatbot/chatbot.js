@@ -5,14 +5,9 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js'; // Используем legacy-сборку
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
-
-// Настройка pdfjs-dist
-// Указываем путь к worker'у из legacy-сборки
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/legacy/build/pdf.worker.js';
 
 const app = express();
 app.use(cors());
@@ -227,66 +222,6 @@ bot.on('message', async (msg) => {
   const systemPrompt = lastSummary
     ? `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Пользователя зовут ${user.custom_name}. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным. Общайся в дружеском стиле, как близкий друг, избегай формальностей, будь внимателен к эмоциям пользователя.`
     : `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Пользователя зовут ${user.custom_name}. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя. Общайся в тёплом, разговорном стиле, без формальностей, с заботой и поддержкой.`;
-
-  // Обработка PDF
-  if (msg.document && msg.document.mime_type === 'application/pdf') {
-    try {
-      const fileId = msg.document.file_id;
-      const file = await bot.getFile(fileId);
-      const fileUrl = `https://api.telegram.org/file/bot${process.env.CHATBOT_TOKEN}/${file.file_path}`;
-
-      // Скачиваем PDF
-      const fetchResponse = await fetch(fileUrl);
-      const buffer = await fetchResponse.arrayBuffer();
-      console.log('PDF downloaded, buffer size:', buffer.byteLength);
-
-      // Извлекаем текст с помощью pdfjs-dist
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
-      let extractedText = '';
-
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map(item => item.str).join(' ');
-        extractedText += `Страница ${pageNum}:\n${pageText}\n\n`;
-      }
-
-      if (!extractedText || extractedText.trim() === '') {
-        await bot.sendMessage(chatId, '⛔ Не удалось извлечь текст из PDF. Возможно, файл пустой или содержит только изображения. Попробуй другой файл.');
-        return;
-      }
-
-      const messages = chatHistoryCache.get(String(chatId));
-      const messageContent = `Вот текст из PDF:\n${extractedText}\n\nОпиши, о чём этот документ.`;
-      messages.push({
-        role: 'user',
-        content: messageContent
-      });
-
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        fetch
-      });
-
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...messages
-        ],
-        max_tokens: 500
-      });
-
-      const description = response.choices[0].message.content;
-      await bot.sendMessage(chatId, `Описание PDF: ${description}`);
-
-      messages.push({ role: 'assistant', content: description });
-    } catch (err) {
-      console.error('Error processing PDF:', err);
-      await bot.sendMessage(chatId, '⛔ Ошибка при обработке PDF: ' + err.message + '. Попробуй снова позже или отправь другой файл.');
-    }
-    return;
-  }
 
   // Обработка фото
   if (msg.photo) {
