@@ -195,7 +195,7 @@ bot.on('message', async (msg) => {
   console.log(`Current state for user ${chatId}:`, state);
 
   // Инициализация истории для нового юзера
-  if (!chatHistoryPayload.has(String(chatId))) {
+  if (!chatHistoryCache.has(String(chatId))) {
     chatHistoryCache.set(String(chatId), []);
   }
 
