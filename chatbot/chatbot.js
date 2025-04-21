@@ -176,7 +176,7 @@ bot.on('message', async (msg) => {
     console.log(`User ${chatId} status: ${user.status}, access denied`);
     await bot.sendMessage(
       chatId,
-      '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_bot для оплаты.'
+      '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_botBenjamin для оплаты.'
     );
     return;
   }
@@ -220,8 +220,60 @@ bot.on('message', async (msg) => {
   console.log(`Last summary for user ${chatId}:`, lastSummary);
 
   const systemPrompt = lastSummary
-  ? `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным. Общайся в дружеском стиле, как близкий друг, избегай формальностей, будь внимателен к эмоциям пользователя.`
-  : 'Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя. Общайся в тёплом, разговорном стиле, без формальностей, с заботой и поддержкой.';
+    ? `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Пользователя зовут ${user.custom_name}. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным. Общайся в дружеском стиле, как близкий друг, избегай формальностей, будь внимателен к эмоциям пользователя.`
+    : `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мои знания актуальны до декабря 2024 года. Пользователя зовут ${user.custom_name}. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя. Общайся в тёплом, разговорном стиле, без формальностей, с заботой и поддержкой.`;
+
+  // Обработка PDF
+  if (msg.document && msg.document.mime_type === 'application/pdf') {
+    try {
+      const fileId = msg.document.file_id;
+      const file = await bot.getFile(fileId);
+      const fileUrl = `https://api.telegram.org/file/bot${process.env.CHATBOT_TOKEN}/${file.file_path}`;
+
+      // Скачиваем PDF
+      const response = await fetch(fileUrl);
+      const buffer = await response.buffer();
+
+      // Извлекаем текст из PDF
+      const pdfParse = require('pdf-parse');
+      const pdfData = await pdfParse(buffer);
+      const pdfText = pdfData.text;
+
+      if (!pdfText) {
+        await bot.sendMessage(chatId, '⛔ Не удалось извлечь текст из PDF. Попробуй другой файл.');
+        return;
+      }
+
+      const messages = chatHistoryCache.get(String(chatId));
+      messages.push({
+        role: 'user',
+        content: `Вот текст из PDF:\n${pdfText}\n\nОпиши, о чём этот документ.`
+      });
+
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        fetch
+      });
+
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...messages
+        ],
+        max_tokens: 500
+      });
+
+      const description = response.choices[0].message.content;
+      await bot.sendMessage(chatId, `Описание PDF: ${description}`);
+
+      messages.push({ role: 'assistant', content: description });
+    } catch (err) {
+      console.error('Error processing PDF:', err);
+      await bot.sendMessage(chatId, '⛔ Ошибка при обработке PDF. Попробуй снова позже.');
+    }
+    return;
+  }
 
   // Обработка фото
   if (msg.photo) {
@@ -306,19 +358,26 @@ bot.on('message', async (msg) => {
       fetch
     });
     try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...messages
-        ],
-        max_tokens: 500,
-        temperature: 0.9
-      });
-
-      const botResponse = response.choices[0].message.content;
+      let botResponse;
+      if (text.toLowerCase().includes('как меня зовут')) {
+        botResponse = `Тебя зовут ${user.custom_name}! 😊`;
+      } else if (text.toLowerCase().includes('кто для меня союзник')) {
+        botResponse = `Для тебя союзник — ${user.persona}! 😊`;
+      } else if (text.toLowerCase().includes('что для меня важно')) {
+        botResponse = `Для тебя сейчас важно ${user.priority}! 😊`;
+      } else {
+        const response = await openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages
+          ],
+          max_tokens: 500,
+          temperature: 0.9
+        });
+        botResponse = response.choices[0].message.content;
+      }
       await bot.sendMessage(chatId, botResponse);
-
       messages.push({ role: 'assistant', content: botResponse });
     } catch (err) {
       console.error('Error in default chat mode:', err);
@@ -421,19 +480,26 @@ bot.on('message', async (msg) => {
         fetch
       });
       try {
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages
-          ],
-          max_tokens: 500,
-          temperature: 0.9
-        });
-
-        const botResponse = response.choices[0].message.content;
+        let botResponse;
+        if (text.toLowerCase().includes('как меня зовут')) {
+          botResponse = `Тебя зовут ${user.custom_name}! 😊`;
+        } else if (text.toLowerCase().includes('кто для меня союзник')) {
+          botResponse = `Для тебя союзник — ${user.persona}! 😊`;
+        } else if (text.toLowerCase().includes('что для меня важно')) {
+          botResponse = `Для тебя сейчас важно ${user.priority}! 😊`;
+        } else {
+          const response = await openai.chat.completions.create({
+            model: 'gpt-4o',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...messages
+            ],
+            max_tokens: 500,
+            temperature: 0.9
+          });
+          botResponse = response.choices[0].message.content;
+        }
         await bot.sendMessage(chatId, botResponse);
-
         messages.push({ role: 'assistant', content: botResponse });
       } catch (err) {
         console.error('Error in default chat mode:', err);
