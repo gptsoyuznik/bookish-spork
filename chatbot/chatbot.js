@@ -5,10 +5,13 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
-import PDFParser from 'pdf2json'; // Импортируем pdf2json
+import * as pdfjsLib from 'pdfjs-dist';
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
+
+// Настройка pdfjs-dist
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.mjs';
 
 const app = express();
 app.use(cors());
@@ -234,29 +237,61 @@ bot.on('message', async (msg) => {
       // Скачиваем PDF
       const fetchResponse = await fetch(fileUrl);
       const buffer = await fetchResponse.arrayBuffer();
+      console.log('PDF downloaded, buffer size:', buffer.byteLength);
 
-      // Извлекаем текст из PDF с помощью pdf2json
-      const pdfParser = new PDFParser();
-      const pdfTextPromise = new Promise((resolve, reject) => {
-        pdfParser.on('pdfParser_dataError', errData => reject(new Error(errData.parserError)));
-        pdfParser.on('pdfParser_dataReady', pdfData => {
-          const text = pdfParser.getRawTextContent();
-          resolve(text);
-        });
-      });
+      // Извлекаем текст и изображения с помощью pdfjs-dist
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+      let extractedText = '';
+      const images = [];
 
-      pdfParser.parseBuffer(Buffer.from(buffer));
-      const pdfText = await pdfTextPromise;
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        extractedText += `Страница ${pageNum}:\n${pageText}\n\n`;
 
-      if (!pdfText) {
-        await bot.sendMessage(chatId, '⛔ Не удалось извлечь текст из PDF. Попробуй другой файл.');
+        // Рендеринг страницы для извлечения изображений
+        const viewport = page.getViewport({ scale: 1.0 });
+        const canvas = { width: viewport.width, height: viewport.height };
+        const context = {
+          fillStyle: 'white',
+          fillRect: () => {},
+          drawImage: () => {}
+        };
+        const renderContext = {
+          canvasContext: context,
+          viewport: viewport
+        };
+        await page.render(renderContext).promise;
+
+        // Извлечение изображений (примерный подход, может потребовать дополнительной настройки)
+        const operatorList = await page.getOperatorList();
+        for (let i = 0; i < operatorList.fnArray.length; i++) {
+          if (operatorList.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
+            const imgIndex = operatorList.argsArray[i][0];
+            const imgData = await page.objs.get(imgIndex);
+            if (imgData) {
+              images.push(imgData);
+              console.log(`Изображение найдено на странице ${pageNum}`);
+            }
+          }
+        }
+      }
+
+      if (!extractedText || extractedText.trim() === '') {
+        await bot.sendMessage(chatId, '⛔ Не удалось извлечь текст из PDF. Возможно, файл пустой или содержит только изображения. Попробуй другой файл.');
         return;
       }
 
       const messages = chatHistoryCache.get(String(chatId));
+      let messageContent = `Вот текст из PDF:\n${extractedText}\n\n`;
+      if (images.length > 0) {
+        messageContent += `В документе найдено ${images.length} изображений.\n`;
+      }
+      messageContent += 'Опиши, о чём этот документ.';
       messages.push({
         role: 'user',
-        content: `Вот текст из PDF:\n${pdfText}\n\nОпиши, о чём этот документ.`
+        content: messageContent
       });
 
       const openai = new OpenAI({
@@ -279,7 +314,7 @@ bot.on('message', async (msg) => {
       messages.push({ role: 'assistant', content: description });
     } catch (err) {
       console.error('Error processing PDF:', err);
-      await bot.sendMessage(chatId, '⛔ Ошибка при обработке PDF. Попробуй снова позже.');
+      await bot.sendMessage(chatId, '⛔ Ошибка при обработке PDF: ' + err.message + '. Попробуй снова позже или отправь другой файл.');
     }
     return;
   }
