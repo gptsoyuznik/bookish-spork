@@ -5,14 +5,14 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
-import * as pdfjsLib from 'pdfjs-dist'; // Исправляем импорт
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js'; // Используем legacy-сборку
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
 
 // Настройка pdfjs-dist
-// Указываем путь к worker'у из node_modules
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/build/pdf.worker.mjs';
+// Указываем путь к worker'у из legacy-сборки
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/legacy/build/pdf.worker.js';
 
 const app = express();
 app.use(cors());
@@ -240,43 +240,15 @@ bot.on('message', async (msg) => {
       const buffer = await fetchResponse.arrayBuffer();
       console.log('PDF downloaded, buffer size:', buffer.byteLength);
 
-      // Извлекаем текст и изображения с помощью pdfjs-dist
+      // Извлекаем текст с помощью pdfjs-dist
       const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
       let extractedText = '';
-      const images = [];
 
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         const pageText = textContent.items.map(item => item.str).join(' ');
         extractedText += `Страница ${pageNum}:\n${pageText}\n\n`;
-
-        // Рендеринг страницы для извлечения изображений
-        const viewport = page.getViewport({ scale: 1.0 });
-        const canvas = { width: viewport.width, height: viewport.height };
-        const context = {
-          fillStyle: 'white',
-          fillRect: () => {},
-          drawImage: () => {}
-        };
-        const renderContext = {
-          canvasContext: context,
-          viewport: viewport
-        };
-        await page.render(renderContext).promise;
-
-        // Извлечение изображений (примерный подход, может потребовать дополнительной настройки)
-        const operatorList = await page.getOperatorList();
-        for (let i = 0; i < operatorList.fnArray.length; i++) {
-          if (operatorList.fnArray[i] === pdfjsLib.OPS.paintImageXObject) {
-            const imgIndex = operatorList.argsArray[i][0];
-            const imgData = await page.objs.get(imgIndex);
-            if (imgData) {
-              images.push(imgData);
-              console.log(`Изображение найдено на странице ${pageNum}`);
-            }
-          }
-        }
       }
 
       if (!extractedText || extractedText.trim() === '') {
@@ -285,11 +257,7 @@ bot.on('message', async (msg) => {
       }
 
       const messages = chatHistoryCache.get(String(chatId));
-      let messageContent = `Вот текст из PDF:\n${extractedText}\n\n`;
-      if (images.length > 0) {
-        messageContent += `В документе найдено ${images.length} изображений.\n`;
-      }
-      messageContent += 'Опиши, о чём этот документ.';
+      const messageContent = `Вот текст из PDF:\n${extractedText}\n\nОпиши, о чём этот документ.`;
       messages.push({
         role: 'user',
         content: messageContent
