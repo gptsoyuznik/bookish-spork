@@ -5,13 +5,16 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf'; // Используем legacy-сборку
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf'; // Импортируем getDocument отдельно
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
 
 // Настройка pdfjs-dist
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.mjs';
+// Убираем HTTPS-ссылку, используем встроенный worker из pdfjs-dist
+import pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.js'; // Импортируем worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const app = express();
 app.use(cors());
@@ -240,7 +243,7 @@ bot.on('message', async (msg) => {
       console.log('PDF downloaded, buffer size:', buffer.byteLength);
 
       // Извлекаем текст и изображения с помощью pdfjs-dist
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+      const pdf = await getDocument({ data: new Uint8Array(buffer) }).promise;
       let extractedText = '';
       const images = [];
 
