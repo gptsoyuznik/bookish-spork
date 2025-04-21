@@ -176,7 +176,7 @@ bot.on('message', async (msg) => {
     console.log(`User ${chatId} status: ${user.status}, access denied`);
     await bot.sendMessage(
       chatId,
-      '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_botBenjamin для оплаты.'
+      '⛔ Доступ закрыт. Пожалуйста, вернитесь в основной чат @gpt_soyuznik_bot для оплаты.'
     );
     return;
   }
@@ -231,8 +231,8 @@ bot.on('message', async (msg) => {
       const fileUrl = `https://api.telegram.org/file/bot${process.env.CHATBOT_TOKEN}/${file.file_path}`;
 
       // Скачиваем PDF
-      const response = await fetch(fileUrl);
-      const buffer = await response.buffer();
+      const fetchResponse = await fetch(fileUrl);
+      const buffer = await fetchResponse.buffer();
 
       // Извлекаем текст из PDF
       const pdfParse = require('pdf-parse');
