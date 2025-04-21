@@ -62,7 +62,7 @@ setInterval(async () => {
         });
 
         const response = await openai.chat.completions.create({
-          model: 'gpt-4',
+          model: 'gpt-4o',
           messages: [
             {
               role: 'system',
@@ -221,8 +221,8 @@ bot.on('message', async (msg) => {
     console.log(`Last summary for user ${chatId}:`, lastSummary);
 
     const systemPrompt = lastSummary
-      ? `Ты эмпатичный союзник. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным.`
-      : 'Ты эмпатичный союзник. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя.';
+      ? `Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Вчера в нашем диалоге: ${lastSummary.summary}. Используй эту информацию, чтобы сделать диалог более тёплым и продолжительным. Общайся в дружеском стиле, как близкий друг, избегай формальностей, будь внимателен к эмоциям пользователя.`
+      : 'Ты эмпатичный союзник, использующий модель GPT-4o от OpenAI. Мы начинаем новый диалог, будь внимателен к эмоциям и запросам пользователя. Общайся в тёплом, разговорном стиле, без формальностей, с заботой и поддержкой.';
 
     // Обработка фото
     if (msg.photo) {
@@ -246,193 +246,9 @@ bot.on('message', async (msg) => {
       });
 
       const response = await openai.chat.completions.create({
-        model: 'gpt-4',
+        model: 'gpt-4o',
         messages: [
           { role: 'system', content: systemPrompt },
           ...messages
         ],
-        max_tokens: 500
-      });
-
-      const description = response.choices[0].message.content;
-      await bot.sendMessage(chatId, `Описание изображения: ${description}`);
-
-      messages.push({ role: 'assistant', content: description });
-      return;
-    }
-
-    // Обработка текстовых сообщений
-    if (!text) return;
-    console.log(`Chatbot message from ${chatId}: ${text}`);
-
-    if (text === '/start') {
-      if (state && state.step >= 3) {
-        console.log(`User ${chatId} already completed initial dialog, clearing state`);
-        const { error: deleteError } = await supabase
-          .from('user_states')
-          .delete()
-          .eq('user_id', user.id);
-        if (deleteError) {
-          console.error('Error deleting from user_states on /start:', deleteError);
-          await supabase
-            .from('user_states')
-            .delete()
-            .eq('user_id', user.id);
-        } else {
-          console.log(`Successfully deleted user_states for user_id: ${user.id} on /start`);
-        }
-      }
-      await supabase
-        .from('user_states')
-        .upsert({ user_id: user.id, step: 1 });
-      await bot.sendMessage(
-        chatId,
-        '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
-      );
-      return;
-    }
-
-    if (!state && user.status === 'paid') {
-      console.log(`No state found for user ${chatId}, status is paid, entering default chat mode`);
-      const messages = chatHistoryCache.get(String(chatId));
-      messages.push({ role: 'user', content: text });
-
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        fetch
-      });
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...messages
-        ],
-        max_tokens: 500
-      });
-
-      const botResponse = response.choices[0].message.content;
-      await bot.sendMessage(chatId, botResponse);
-
-      messages.push({ role: 'assistant', content: botResponse });
-      return;
-    }
-
-    if (!state) {
-      await supabase
-        .from('user_states')
-        .upsert({ user_id: user.id, step: 1 });
-      await bot.sendMessage(
-        chatId,
-        '🎯 Добро пожаловать!\n1️⃣ Как мне к вам обращаться?'
-      );
-      return;
-    }
-
-    switch (state.step) {
-      case 1:
-        console.log(`Updating user ${chatId} with custom_name: ${text}`);
-        const { error: updateError1 } = await supabase
-          .from('users')
-          .update({ custom_name: text })
-          .eq('telegram_chat_id', String(chatId));
-        if (updateError1) {
-          console.error('Error updating custom_name:', updateError1);
-        } else {
-          console.log(`Successfully updated custom_name for user ${chatId}`);
-        }
-
-        await supabase
-          .from('user_states')
-          .update({ step: 2 })
-          .eq('user_id', user.id);
-        return bot.sendMessage(chatId, '2️⃣ Кто для вас союзник?');
-      
-      case 2:
-        console.log(`Updating user ${chatId} with persona: ${text}`);
-        const { error: updateError2 } = await supabase
-          .from('users')
-          .update({ persona: text })
-          .eq('telegram_chat_id', String(chatId));
-        if (updateError2) {
-          console.error('Error updating persona:', updateError2);
-        } else {
-          console.log(`Successfully updated persona for user ${chatId}`);
-        }
-
-        await supabase
-          .from('user_states')
-          .update({ step: 3 })
-          .eq('user_id', user.id);
-        return bot.sendMessage(chatId, '3️⃣ Что для вас сейчас важно?');
-      
-      case 3:
-        console.log(`Updating user ${chatId} with priority: ${text}`);
-        const { error: updateError3 } = await supabase
-          .from('users')
-          .update({ 
-            priority: text,
-            chat_started_at: new Date().toISOString()
-          })
-          .eq('telegram_chat_id', String(chatId));
-        if (updateError3) {
-          console.error('Error updating priority:', updateError3);
-        } else {
-          console.log(`Successfully updated priority for user ${chatId}`);
-        }
-
-        const { error: deleteError } = await supabase
-          .from('user_states')
-          .delete()
-          .eq('user_id', user.id);
-
-        if (deleteError) {
-          console.error('Error deleting from user_states:', deleteError);
-          await supabase
-            .from('user_states')
-            .delete()
-            .eq('user_id', user.id);
-        } else {
-          console.log(`Successfully deleted user_states for user_id: ${user.id}`);
-        }
-
-        console.log(`User ${chatId} completed initial dialog, moving to default mode`);
-        return bot.sendMessage(
-          chatId,
-          '💡 Отлично! Теперь я вас знаю. Можете задавать любые вопросы, и я помогу!'
-        );
-      
-      default:
-        console.log(`User ${chatId} in default chat mode`);
-        const messages = chatHistoryCache.get(String(chatId));
-        messages.push({ role: 'user', content: text });
-
-        const openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY,
-          fetch
-        });
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages
-          ],
-          max_tokens: 500
-        });
-
-        const botResponse = response.choices[0].message.content;
-        await bot.sendMessage(chatId, botResponse);
-
-        messages.push({ role: 'assistant', content: botResponse });
-    }
-  } catch (err) {
-    console.error('Chatbot message processing error:', err);
-    await bot.sendMessage(chatId, '⛔ Произошла ошибка. Попробуйте снова или обратитесь в поддержку.');
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, async () => {
-  console.log(`🚀 Chatbot server running on port ${PORT}`);
-  await checkConnections();
-});
+        max_tokens
