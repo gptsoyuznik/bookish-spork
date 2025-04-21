@@ -5,7 +5,7 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import TelegramBot from 'node-telegram-bot-api';
 import fetch from 'node-fetch';
-import pdfParse from 'pdf-parse'; // Добавляем импорт pdf-parse
+import PDFParser from 'pdf2json'; // Импортируем pdf2json
 
 // Полифилл для fetch
 globalThis.fetch = fetch;
@@ -233,11 +233,20 @@ bot.on('message', async (msg) => {
 
       // Скачиваем PDF
       const fetchResponse = await fetch(fileUrl);
-      const buffer = await fetchResponse.buffer();
+      const buffer = await fetchResponse.arrayBuffer();
 
-      // Извлекаем текст из PDF
-      const pdfData = await pdfParse(buffer);
-      const pdfText = pdfData.text;
+      // Извлекаем текст из PDF с помощью pdf2json
+      const pdfParser = new PDFParser();
+      const pdfTextPromise = new Promise((resolve, reject) => {
+        pdfParser.on('pdfParser_dataError', errData => reject(new Error(errData.parserError)));
+        pdfParser.on('pdfParser_dataReady', pdfData => {
+          const text = pdfParser.getRawTextContent();
+          resolve(text);
+        });
+      });
+
+      pdfParser.parseBuffer(Buffer.from(buffer));
+      const pdfText = await pdfTextPromise;
 
       if (!pdfText) {
         await bot.sendMessage(chatId, '⛔ Не удалось извлечь текст из PDF. Попробуй другой файл.');
