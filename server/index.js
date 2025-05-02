@@ -71,17 +71,33 @@ app.post('/generate-payment-link', async (req, res) => {
       OrderId: orderId,
       Description: 'Союзник 7 дней',
       SuccessURL: 'https://t.me/gpt_soyuznik_bot',
-      FailURL:    'https://t.me/gpt_soyuznik_bot'
+      FailURL: 'https://t.me/gpt_soyuznik_bot'
     };
-    body.Token = sha256(
-      `${process.env.TINKOFF_TERMINAL_KEY}${amount}${orderId}${process.env.TINKOFF_PASSWORD}`
-    );
+
+    // Формируем Token: все поля в алфавитном порядке + Password
+    const tokenData = {
+      TerminalKey: process.env.TINKOFF_TERMINAL_KEY,
+      Amount: amount,
+      OrderId: orderId,
+      Description: 'Союзник 7 дней',
+      SuccessURL: 'https://t.me/gpt_soyuznik_bot',
+      FailURL: 'https://t.me/gpt_soyuznik_bot'
+    };
+    tokenData.Password = process.env.TINKOFF_PASSWORD;
+
+    // Сортируем ключи и конкатенируем значения
+    const sortedKeys = Object.keys(tokenData).sort();
+    const tokenString = sortedKeys.map(key => tokenData[key]).join('');
+    body.Token = sha256(tokenString);
 
     const resp = await fetch('https://securepay.tinkoff.ru/v2/Init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(r => r.json());
+
+    // Добавляем лог для диагностики
+    console.log('👉 Tinkoff raw resp', resp);
 
     if (resp.Success !== true) throw new Error(resp.Message || 'Tinkoff Init error');
 
