@@ -47,6 +47,121 @@ async function checkConnections() {
     process.exit(1);
   }
 }
+/* ----------  PAYMENTS (TINKOFF)  ---------- */
+import crypto from 'crypto';
+
+// helper: подписываем Init и проверяем вебхук
+function sha256(str) {
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+/* 1. POST /generate-payment-link
+   Body: { chatId }
+   ► создаём orderId, зовём Tinkoff /v2/Init, сохраняем в pending_payments   */
+app.post('/generate-payment-link', async (req, res) => {
+  try {
+    const { chatId } = req.body;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+
+    const orderId = `${chatId}-${Date.now()}`;
+    const amount = 99000;           // 990 ₽ → в копейках
+    const body = {
+      TerminalKey: process.env.TINKOFF_TERMINAL_KEY,
+      Amount: amount,
+      OrderId: orderId,
+      Description: 'Союзник 7 дней',
+      SuccessURL: 'https://t.me/gpt_soyuznik_bot',
+      FailURL:    'https://t.me/gpt_soyuznik_bot'
+    };
+    body.Token = sha256(
+      `${process.env.TINKOFF_TERMINAL_KEY}${amount}${orderId}${process.env.TINKOFF_PASSWORD}`
+    );
+
+    const resp = await fetch('https://securepay.tinkoff.ru/v2/Init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(r => r.json());
+
+    if (resp.Success !== true) throw new Error(resp.Message || 'Tinkoff Init error');
+
+    // сохраняем pending
+    await supabase.from('pending_payments').insert({
+      order_id: orderId,
+      chat_id: String(chatId),
+      amount
+    });
+
+    return res.json({ url: resp.PaymentURL, order_id: orderId });
+  } catch (err) {
+    console.error('generate-payment-link error', err);
+    res.status(500).json({ error: 'create link failed' });
+  }
+});
+
+/* 2. POST /tinkoff-webhook   (указываем этот URL в личном кабинете Кассы)
+      берём CONFIRMED и проставляем user.status='paid'              */
+app.post('/tinkoff-webhook', express.json(), async (req, res) => {
+  try {
+    const data = req.body;                 // Tinkoff шлёт form-urlencoded, но json включили — ок
+    const tokenCheck = sha256(
+      `${process.env.TINKOFF_TERMINAL_KEY}${data.Amount}${data.OrderId}${data.Status}${process.env.TINKOFF_PASSWORD}`
+    );
+    if (tokenCheck !== data.Token) throw new Error('Bad token');
+
+    // пишем в payment_logs
+    await supabase.from('payment_logs').insert({
+      order_id: data.OrderId,
+      status: data.Status,
+      payload: JSON.stringify(data)
+    });
+
+    if (data.Status === 'CONFIRMED') {
+      // находим chatId → users → ставим paid
+      const p = await supabase
+        .from('pending_payments')
+        .select('chat_id')
+        .eq('order_id', data.OrderId)
+        .single();
+
+      if (p.data) {
+        await supabase.from('users')
+          .update({ status: 'paid', payment_date: new Date().toISOString() })
+          .eq('bothelp_user_id', p.data.chat_id);
+
+        await bot.sendMessage(
+          p.data.chat_id,
+          '✅ Оплата принята! Пиши /start в @GPTSoyuznikChatBot'
+        );
+      }
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('tinkoff-webhook error', err);
+    res.status(400).json({ error: 'webhook rejected' });
+  }
+});
+
+/* 3. GET /check-payment?chatId=...
+      ► BotHelp проверяет, вернём {paid:boolean}                     */
+app.get('/check-payment', async (req, res) => {
+  try {
+    const { chatId } = req.query;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+
+    const { data } = await supabase
+      .from('users')
+      .select('status')
+      .eq('bothelp_user_id', String(chatId))
+      .single();
+
+    res.json({ paid: data?.status === 'paid' });
+  } catch (err) {
+    console.error('check-payment error', err);
+    res.status(500).json({ paid: false });
+  }
+});
+/* ----------  /PAYMENTS  ---------- */
 
 // Обработка вебхука Telegram
 app.post('/telegram-webhook', express.raw({ 
